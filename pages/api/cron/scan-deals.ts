@@ -10,6 +10,7 @@ interface SourceResult {
   source: string;
   ok: boolean;
   fetched: number;
+  skipped?: boolean;
   error?: string;
 }
 
@@ -48,26 +49,34 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   // --- eBay ---
-  try {
-    const listings = await fetchEbayListings();
-    allListings.push(...listings);
-    sources.push({ source: "ebay", ok: true, fetched: listings.length });
-  } catch (e) {
-    const msg = (e as Error).message;
-    console.error("[scan-deals] eBay source failed:", msg);
-    sources.push({ source: "ebay", ok: false, fetched: 0, error: msg });
-  }
+  // Skip entirely when credentials aren't configured (dev account still pending
+  // approval). This is a clean skip, not a failure — the run proceeds on Reddit.
+  const ebayConfigured = Boolean(process.env.EBAY_CLIENT_ID && process.env.EBAY_CLIENT_SECRET);
+  let insights = "skipped: eBay credentials not set";
+  if (!ebayConfigured) {
+    console.log("[scan-deals] eBay skipped: EBAY_CLIENT_ID/EBAY_CLIENT_SECRET not set");
+    sources.push({ source: "ebay", ok: true, skipped: true, fetched: 0 });
+  } else {
+    try {
+      const listings = await fetchEbayListings();
+      allListings.push(...listings);
+      sources.push({ source: "ebay", ok: true, fetched: listings.length });
+    } catch (e) {
+      const msg = (e as Error).message;
+      console.error("[scan-deals] eBay source failed:", msg);
+      sources.push({ source: "ebay", ok: false, fetched: 0, error: msg });
+    }
 
-  // Informational: report whether sold-comps (Marketplace Insights) is enabled.
-  // Not wired into scoring yet — scoring uses config/watchlist.json medians.
-  let insights = "skipped";
-  try {
-    const r = await checkMarketplaceInsights();
-    insights = r.detail;
-    console.log(`[scan-deals] Marketplace Insights enabled=${r.enabled}: ${r.detail}`);
-  } catch (e) {
-    insights = `check failed: ${(e as Error).message}`;
-    console.error("[scan-deals] Insights check failed:", (e as Error).message);
+    // Informational: report whether sold-comps (Marketplace Insights) is enabled.
+    // Not wired into scoring yet — scoring uses config/watchlist.json medians.
+    try {
+      const r = await checkMarketplaceInsights();
+      insights = r.detail;
+      console.log(`[scan-deals] Marketplace Insights enabled=${r.enabled}: ${r.detail}`);
+    } catch (e) {
+      insights = `check failed: ${(e as Error).message}`;
+      console.error("[scan-deals] Insights check failed:", (e as Error).message);
+    }
   }
 
   // --- Score + dedup ---
