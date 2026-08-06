@@ -1,0 +1,73 @@
+{
+  "_comment": "Hand-editable. `median` is the resale value the scorer compares against. `liquidity` is a manual 1-5 tier (5 = very commonly traded / easy to flip, 1 = niche). Prices are rough USD estimates for the SECONDARY market — correct these with real comps. `aliases` are lowercase substrings matched against listing titles.",
+  "dealThreshold": 0.75,
+  "scoreWeights": {
+    "discount": 0.7,
+    "liquidity": 0.3
+  },
+  "models": [
+    {
+      "brand": "Omega",
+      "model": "Seamaster",
+      "aliases": ["omega seamaster", "seamaster", "aqua terra", "planet ocean"],
+      "resale": { "low": 2200, "median": 3200, "high": 4500 },
+      "liquidity": 5
+    },
+    {
+      "brand": "Omega",
+      "model": "Speedmaster",
+      "aliases": ["omega speedmaster", "speedmaster", "speedy"],
+      "resale": { "low": 3000, "median": 4200, "high": 6000 },
+      "liquidity": 5
+    },
+    {
+      "brand": "Tudor",
+      "model": "Black Bay",
+      "aliases": ["tudor black bay", "black bay", "tudor bb", "pelagos"],
+      "resale": { "low": 2400, "median": 3100, "high": 4200 },
+      "liquidity": 5
+    },
+    {
+      "brand": "Hamilton",
+      "model": "Khaki Field",
+      "aliases": ["hamilton khaki", "khaki field", "hamilton field"],
+      "resale": { "low": 320, "median": 450, "high": 650 },
+      "liquidity": 4
+    },
+    {
+      "brand": "Hamilton",
+      "model": "Intra-Matic",
+      "aliases": ["intra-matic", "intramatic", "hamilton intra"],
+      "resale": { "low": 500, "median": 700, "high": 950 },
+      "liquidity": 3
+    },
+    {
+      "brand": "Seiko",
+      "model": "Prospex / SKX",
+      "aliases": ["seiko prospex", "prospex", "skx", "seiko turtle", "seiko samurai", "seiko willard"],
+      "resale": { "low": 250, "median": 380, "high": 600 },
+      "liquidity": 5
+    },
+    {
+      "brand": "Seiko",
+      "model": "Presage",
+      "aliases": ["seiko presage", "presage", "cocktail time"],
+      "resale": { "low": 280, "median": 420, "high": 650 },
+      "liquidity": 4
+    },
+    {
+      "brand": "Frederique Constant",
+      "model": "Classics / Slimline",
+      "aliases": ["frederique constant", "frederique", "slimline"],
+      "resale": { "low": 450, "median": 700, "high": 1100 },
+      "liquidity": 2
+    },
+    {
+      "brand": "MAEN",
+      "model": "Hudson / Skindiver",
+      "aliases": ["maen hudson", "maen skindiver", "maen watches", "maen "],
+      "resale": { "low": 260, "median": 380, "high": 520 },
+      "liquidity": 2
+    }
+  ]
+}

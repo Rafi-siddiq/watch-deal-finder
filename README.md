@@ -1,40 +1,92 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/pages/api-reference/create-next-app).
+# Watch Deal Finder
 
-## Getting Started
+Surfaces underpriced watch listings from **r/Watchexchange**, **r/watch_swap**, and
+**eBay**, scores each against known resale value, and shows flagged deals on a
+PIN-gated dashboard. **Surface-only** — no auto-buying, no messaging sellers.
 
-First, run the development server:
+- **Cron** (`/api/cron/scan-deals`) pulls new listings, scores, dedups, stores.
+- **Dashboard** (`/`) shows flagged deals, sortable by score or newest.
+- **Storage**: Upstash Redis (seen-IDs with 30-day TTL + a capped deals list).
+
+Stack: Next.js (Pages Router) + TypeScript + Tailwind v4, deploy-ready for Vercel.
+
+---
+
+## 1. Local setup
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm install
+cp .env.example .env.local   # then fill in the values below
+npm run dev                  # http://localhost:3000
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## 2. Getting the credentials
 
-You can start editing the page by modifying `pages/index.tsx`. The page auto-updates as you edit the file.
+### Reddit (script app)
+1. Go to <https://www.reddit.com/prefs/apps> → **create another app**.
+2. Choose **script** (this is what enables the OAuth2 *password* grant we use —
+   `client_credentials` will NOT let you read `/r/{sub}/new` as a user).
+3. Set redirect URI to `http://localhost:3000` (unused, but required).
+4. After creating:
+   - `REDDIT_CLIENT_ID` = the string just under the app name (e.g. `p-Xy1...`).
+   - `REDDIT_CLIENT_SECRET` = the **secret** field.
+   - `REDDIT_USERNAME` / `REDDIT_PASSWORD` = your Reddit login.
+   - `REDDIT_USER_AGENT` = a descriptive UA, e.g. `watch-deal-finder/1.0 by u/you`.
+     Reddit throttles generic/missing UAs hard — make it unique.
 
-[API routes](https://nextjs.org/docs/pages/building-your-application/routing/api-routes) can be accessed on [http://localhost:3000/api/hello](http://localhost:3000/api/hello). This endpoint can be edited in `pages/api/hello.ts`.
+### eBay (Browse API)
+1. Sign up at <https://developer.ebay.com> and create an app keyset.
+2. Use the **Production** keyset (Sandbox has no real listings):
+   - `EBAY_CLIENT_ID` = **App ID (Client ID)**.
+   - `EBAY_CLIENT_SECRET` = **Cert ID (Client Secret)**.
+3. The Browse API works with the default `api_scope` — no extra approval needed.
+4. **Marketplace Insights (sold comps)** requires a *separate* application and
+   approval. The cron probes it each run and logs whether it's enabled
+   (`[scan-deals] Marketplace Insights enabled=...`). If it's not approved, we
+   fall back to a **fragile HTML scrape** (`scrapeSoldComps` in `lib/ebay.ts`,
+   clearly marked NEEDS REVIEW) — currently not wired into scoring, which uses
+   the hand-edited medians in `config/watchlist.json`.
 
-The `pages/api` directory is mapped to `/api/*`. Files in this directory are treated as [API routes](https://nextjs.org/docs/pages/building-your-application/routing/api-routes) instead of React pages.
+### Upstash Redis
+1. Create a database at <https://console.upstash.com>.
+2. Copy the **REST** URL + token into `UPSTASH_REDIS_REST_URL` /
+   `UPSTASH_REDIS_REST_TOKEN`.
 
-This project uses [`next/font`](https://nextjs.org/docs/pages/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+### Dashboard PIN
+Set `DASHBOARD_PIN` to any value. The login form (`/login`) sets a cookie holding
+`SHA-256(pin)`; middleware validates it on `/` and `/api/deals`.
 
-## Learn More
+## 3. Run a scan manually
 
-To learn more about Next.js, take a look at the following resources:
+```bash
+curl http://localhost:3000/api/cron/scan-deals
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn-pages-router) - an interactive Next.js tutorial.
+Returns a JSON summary: per-source status, listings fetched, deals matched, new
+deals flagged. If one source's API fails, the run still completes and stores the
+other source's results.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## 4. Deploy to Vercel
 
-## Deploy on Vercel
+1. Push this repo to GitHub, import it in Vercel.
+2. Add every var from `.env.example` in **Project → Settings → Environment Variables**.
+3. `vercel.json` registers the cron (`*/20 * * * *`). **Note:** sub-daily cron
+   frequency requires a Vercel **Pro** plan; on Hobby, change the schedule to
+   daily (e.g. `0 14 * * *`) or trigger the endpoint from an external scheduler.
+4. (Recommended) set `CRON_SECRET` so the endpoint can't be triggered publicly.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Tuning
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/pages/building-your-application/deploying) for more details.
+Everything scorer-related lives in [`config/watchlist.json`](config/watchlist.json):
+
+- `models[]` — brand/model, title `aliases`, resale `{low, median, high}`, and a
+  manual `liquidity` tier (1–5).
+- `dealThreshold` — flag when `price < median * threshold` (default `0.75`).
+- `scoreWeights` — how the 0–100 score splits between discount depth and liquidity.
+
+Edit the medians with real comps as you gather them.
+
+## What's intentionally NOT built (later phases)
+
+Chrono24 / Grailed / FB Marketplace scraping, auto-messaging sellers, and a full
+comps engine. See `CLAUDE_HANDOFF.md`.
