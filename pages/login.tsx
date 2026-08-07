@@ -36,15 +36,17 @@ export default function Login() {
       <Head>
         <title>Sign in · Watch Deal Finder</title>
       </Head>
-      <main className="flex min-h-screen items-center justify-center px-4">
+      <main className="flex min-h-screen items-center justify-center bg-background px-4">
         <form
           onSubmit={submit}
-          className="w-full max-w-sm rounded-2xl border border-border bg-card p-6"
+          className="w-full max-w-sm rounded-2xl border border-border bg-card p-7"
         >
-          <p className="mb-1 font-mono text-[11px] uppercase tracking-[0.14em] text-muted">
+          <p className="mb-1 font-mono text-[11px] uppercase tracking-[0.16em] text-muted">
             Watch Deal Finder
           </p>
-          <h1 className="mb-6 text-xl font-semibold">Enter PIN</h1>
+          <h1 className="mb-7 font-serif text-2xl font-medium tracking-tight text-foreground">
+            Enter PIN
+          </h1>
           <input
             type="password"
             inputMode="numeric"
@@ -52,13 +54,13 @@ export default function Login() {
             value={pin}
             onChange={(e) => setPin(e.target.value)}
             placeholder="••••"
-            className="mb-3 w-full rounded-xl border border-border bg-background px-4 py-2.5 font-mono tabular-nums outline-none focus:border-brand"
+            className="mb-3 w-full rounded-xl border border-border bg-background px-4 py-3 font-mono text-base tabular-nums text-foreground outline-none focus:border-brand"
           />
-          {error && <p className="mb-3 text-sm text-[#e11d48]">{error}</p>}
+          {error && <p className="mb-3 text-sm text-[#c4665f]">{error}</p>}
           <button
             type="submit"
             disabled={busy || !pin}
-            className="w-full rounded-xl bg-brand px-4 py-2.5 font-medium text-white transition-colors hover:bg-brand-hover disabled:opacity-50"
+            className="w-full rounded-xl bg-brand px-4 py-3 font-medium text-[#1a1408] transition-colors hover:bg-brand-hover disabled:opacity-50"
           >
             {busy ? "Checking…" : "Unlock dashboard"}
           </button>

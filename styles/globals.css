@@ -1,15 +1,17 @@
 @import "tailwindcss";
 
-/* Watch Deal Finder — fixed warm-dark theme (dashboard is dark-only for v1). */
+/* Watch Deal Finder — editorial dark theme. */
 :root {
   --background: #0a0a08;
-  --foreground: #f5f5f0;
-  --card: #1a1a14;
-  --card-hover: #1f1f18;
-  --border: #2a2a22;
-  --muted: #a1a196;
-  --brand: #0d9488;
-  --brand-hover: #14b8a6;
+  --foreground: #f2f0ea;
+  --card: #141410;
+  --card-hover: #191914;
+  --border: #232019;
+  --muted: #8f8b7d;
+  --brand: #cdae6d;       /* brass — score / primary accent */
+  --brand-hover: #dcc084;
+  --teal: #5a9a9a;        /* eBay tag */
+  --rust: #b8825a;        /* Reddit tag */
 }
 
 @theme inline {
@@ -21,12 +23,23 @@
   --color-muted: var(--muted);
   --color-brand: var(--brand);
   --color-brand-hover: var(--brand-hover);
+  --color-teal: var(--teal);
+  --color-rust: var(--rust);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+  --font-serif: var(--font-source-serif);
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
   font-family: var(--font-sans), system-ui, sans-serif;
+}
+
+a { color: var(--brand); }
+a:hover { color: var(--brand-hover); }
+
+@keyframes pulse-soft {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 0.9; }
 }

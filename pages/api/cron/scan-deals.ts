@@ -3,8 +3,10 @@ import { fetchRedditListings } from "@/lib/reddit";
 import { fetchEbayListings, checkMarketplaceInsights } from "@/lib/ebay";
 import { evaluate } from "@/lib/scoring";
 import { watchlist } from "@/lib/watchlist";
-import { markSeen, storeDeals } from "@/lib/redis";
-import type { Deal, RawListing } from "@/lib/types";
+import { trackListing, upsertDeal } from "@/lib/redis";
+import type { RawListing } from "@/lib/types";
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 interface SourceResult {
   source: string;
@@ -79,30 +81,35 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
   }
 
-  // --- Score + dedup ---
-  const flagged: Deal[] = [];
+  // --- Score, track staleness, upsert ---
+  // Every qualifying deal is tracked (persist first_seen, refresh last_confirmed)
+  // and upserted each run so days-listed / stale / profit stay current — we no
+  // longer drop repeat sightings on dedup.
   let evaluated = 0;
+  let newDeals = 0;
+  let staleDeals = 0;
+
   for (const listing of allListings) {
     const deal = evaluate(listing, watchlist);
     if (!deal) continue;
     evaluated++;
-    // markSeen returns true if we've already flagged this id within the TTL.
-    let alreadySeen = false;
     try {
-      alreadySeen = await markSeen(listing.source, listing.id);
+      const track = await trackListing(listing.source, listing.id);
+      deal.firstSeenAt = track.firstSeenAt;
+      deal.lastConfirmedActiveAt = track.lastConfirmedActiveAt;
+      // Use the tracker's own timestamps (consistent ordering) so a brand-new
+      // listing reads 0, never a negative from clock skew against outer `now`.
+      deal.daysListed = Math.max(
+        0,
+        Math.floor((track.lastConfirmedActiveAt - track.firstSeenAt) / DAY_MS)
+      );
+      deal.stale = deal.daysListed >= deal.staleAfterDays;
+      if (track.isNew) newDeals++;
+      if (deal.stale) staleDeals++;
+      await upsertDeal(deal);
     } catch (e) {
-      console.error("[scan-deals] dedup check failed for", listing.id, (e as Error).message);
-      // If Redis is unreachable we still surface the deal this run rather than drop it.
+      console.error("[scan-deals] track/upsert failed for", listing.id, (e as Error).message);
     }
-    if (!alreadySeen) flagged.push(deal);
-  }
-
-  flagged.sort((a, b) => b.score - a.score);
-
-  try {
-    await storeDeals(flagged);
-  } catch (e) {
-    console.error("[scan-deals] storeDeals failed:", (e as Error).message);
   }
 
   const anyOk = sources.some((s) => s.ok);
@@ -112,7 +119,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     sources,
     listings: allListings.length,
     dealsMatched: evaluated,
-    newDealsFlagged: flagged.length,
+    newDeals,
+    staleDeals,
+    freshDeals: evaluated - staleDeals,
     marketplaceInsights: insights,
   };
   console.log("[scan-deals] run complete:", JSON.stringify(body));

@@ -1,9 +1,22 @@
 {
-  "_comment": "Hand-editable. `median` is the resale value the scorer compares against. `liquidity` is a manual 1-5 tier (5 = very commonly traded / easy to flip, 1 = niche). Prices are rough USD estimates for the SECONDARY market — correct these with real comps. `aliases` are lowercase substrings matched against listing titles.",
+  "_comment": "Hand-editable. `median` is the resale value the scorer compares against. `liquidity` is a manual 1-5 tier (5 = very commonly traded / easy to flip, 1 = niche). Prices are rough USD estimates for the SECONDARY market — correct these with real comps. `aliases` are lowercase substrings matched against listing titles. FILTERS: `excludeTitleTerms` reject a listing outright when its title contains one (junk/parts/condition words). `matchExcludeTerms` disqualify a brand match even if the alias appears (homage/tribute listings). `vintageTerms` mark a listing as vintage so it isn't scored against the modern median (the scorer also treats any 19xx year/decade in the title as vintage). All matched as whole words, case-insensitive. `accessoryTerms` + `watchIndicativeTerms`: drop a listing whose title has an accessory word (belt/band/strap) UNLESS it also has a watch-indicative term (automatic/quartz/…/a size like 40mm) — catches straps/belts a seller miscategorized under Wristwatches, without dropping real watches that mention a bracelet/band. `allowedLeafCategoryIds` keeps only eBay items whose leaf category is a real wristwatch category (excludes straps/belts/parts by CATEGORY, not title). `staleDaysByLiquidity` maps a model's liquidity tier (1-5) to the days-listed threshold at which a still-present listing is flagged stale (high-liquidity brands get longer since they normally move fast). `profit`: estimatedNetProfit = median*resaleFactor*(1-ebayFeePct) - shippingEstimate - price; listings under `minNetProfit` are filtered out (this is IN ADDITION to the discount-% threshold).",
   "dealThreshold": 0.75,
   "scoreWeights": {
     "discount": 0.7,
     "liquidity": 0.3
+  },
+  "excludeTitleTerms": ["parts", "junk", "broken", "for repair", "as is", "as-is", "not working", "accessories", "accessory"],
+  "matchExcludeTerms": ["homage", "tribute", "inspired by", "style"],
+  "vintageTerms": ["vintage"],
+  "accessoryTerms": ["belt", "band", "strap"],
+  "watchIndicativeTerms": ["automatic", "quartz", "chronograph", "case", "dial", "movement", "mm", "ref"],
+  "allowedLeafCategoryIds": ["31387"],
+  "staleDaysByLiquidity": { "5": 21, "4": 18, "3": 14, "2": 12, "1": 10 },
+  "profit": {
+    "resaleFactor": 0.85,
+    "ebayFeePct": 0.15,
+    "shippingEstimate": 35,
+    "minNetProfit": 150
   },
   "models": [
     {

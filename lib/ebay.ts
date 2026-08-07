@@ -54,6 +54,7 @@ interface BrowseItem {
   price?: { value?: string; currency?: string };
   itemWebUrl: string;
   itemCreationDate?: string;
+  leafCategoryIds?: string[];
 }
 
 /**
@@ -98,6 +99,9 @@ export async function fetchEbayListings(limitPerTerm = 25): Promise<RawListing[]
         body: priceText,
         url: it.itemWebUrl,
         createdAt: it.itemCreationDate ? Date.parse(it.itemCreationDate) : Date.now(),
+        // Leaf category lets the scorer drop accessory listings (straps/belts/
+        // parts) that keyword-match a brand but aren't wristwatches.
+        leafCategoryIds: it.leafCategoryIds,
       });
     }
   }
