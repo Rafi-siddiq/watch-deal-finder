@@ -25,6 +25,7 @@ type WatchlistFilters = Watchlist & {
 
 const DEFAULT_STALE_DAYS = 14;
 const DEFAULT_PROFIT = { resaleFactor: 0.85, ebayFeePct: 0.15, shippingEstimate: 35, minNetProfit: 150 };
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Build a case-insensitive, whole-word regex from a term list (phrases allowed).
@@ -228,26 +229,44 @@ export function parseConditionText(text: string): string | undefined {
 }
 
 /**
- * First watchlist model whose alias appears in the listing text (case-insensitive).
- * Homage/tribute/"inspired by"/style listings are disqualified even when a brand
- * alias appears — a "MAEN Homage" is not a MAEN.
+ * Match a listing to a watchlist model by alias, preferring the MOST SPECIFIC
+ * match (longest matching alias) rather than array order — so a title mentioning
+ * both "Speedmaster" and "Seamaster" resolves to Speedmaster, not whichever comes
+ * first in the config. Homage/tribute/style listings are disqualified even when a
+ * brand alias appears. Returns the chosen model plus `needsReview`, which is true
+ * when two DIFFERENT models tie on longest matched alias (genuinely ambiguous).
  */
-export function matchModel(
+export function matchModelDetailed(
   listing: RawListing,
   watchlist: Watchlist
-): WatchModel | null {
+): { model: WatchModel; needsReview: boolean } | null {
   const cfg = watchlist as WatchlistFilters;
   const hay = `${listing.title} ${listing.body}`.toLowerCase();
 
   const excludeRe = buildTermRegex(cfg.matchExcludeTerms);
   if (excludeRe && excludeRe.test(hay)) return null;
 
+  // For each model, the length of its longest alias that appears in the text.
+  const matches: { model: WatchModel; len: number }[] = [];
   for (const model of watchlist.models) {
-    if (model.aliases.some((a) => hay.includes(a.toLowerCase()))) {
-      return model;
+    let best = 0;
+    for (const a of model.aliases) {
+      if (hay.includes(a.toLowerCase())) best = Math.max(best, a.trim().length);
     }
+    if (best > 0) matches.push({ model, len: best });
   }
-  return null;
+  if (matches.length === 0) return null;
+
+  matches.sort((x, y) => y.len - x.len);
+  const top = matches[0];
+  // Ambiguous only if a DIFFERENT model matched with the same top specificity.
+  const needsReview = matches.some((m) => m.model !== top.model && m.len === top.len);
+  return { model: top.model, needsReview };
+}
+
+/** Back-compat: the chosen model only (specificity-ranked). */
+export function matchModel(listing: RawListing, watchlist: Watchlist): WatchModel | null {
+  return matchModelDetailed(listing, watchlist)?.model ?? null;
 }
 
 /**
@@ -284,9 +303,10 @@ export function evaluate(listing: RawListing, watchlist: Watchlist): Deal | null
   //     accessories a seller miscategorized under Wristwatches.
   if (isBareAccessory(listing, cfg)) return null;
 
-  // 2) Model match (already rejects homage/tribute/style listings).
-  const model = matchModel(listing, watchlist);
-  if (!model) return null;
+  // 2) Model match (specificity-ranked; rejects homage/tribute/style listings).
+  const matched = matchModelDetailed(listing, watchlist);
+  if (!matched) return null;
+  const { model, needsReview } = matched;
 
   // 3) Vintage exclusion — a 1960s piece shouldn't be scored against a modern median.
   if (isVintage(listing, cfg)) return null;
@@ -318,6 +338,16 @@ export function evaluate(listing: RawListing, watchlist: Watchlist): Deal | null
   const fullSet = parseFullSet(text);
   const condition = listing.condition ?? parseConditionText(text);
 
+  // Age from the REAL SOURCE timestamp (createdAt = eBay itemCreationDate /
+  // Reddit created_utc), NOT bot-observation time — so a listing that existed
+  // before we first saw it shows its true age.
+  const createdAt = listing.createdAt || now;
+  const daysListed = Math.max(0, Math.floor((now - createdAt) / DAY_MS));
+  const staleAfterDays = staleAfterDaysFor(model, cfg);
+  const stale = daysListed >= staleAfterDays;
+  const ageTier: Deal["ageTier"] =
+    stale ? "stale" : daysListed >= staleAfterDays * 0.6 ? "aging" : "fresh";
+
   return {
     source: listing.source,
     id: listing.id,
@@ -330,18 +360,20 @@ export function evaluate(listing: RawListing, watchlist: Watchlist): Deal | null
     discount,
     score,
     foundAt: now,
-    createdAt: listing.createdAt || now,
+    createdAt,
     imageUrl: listing.imageUrl,
     additionalImageUrls: listing.additionalImageUrls,
     condition,
     fullSet,
     refNumber,
+    needsReview,
     estimatedNetProfit,
-    // Provisional staleness — the cron replaces these from the Redis record.
+    daysListed,
+    staleAfterDays,
+    stale,
+    ageTier,
+    // Observation record — provisional; the cron fills real values from Redis.
     firstSeenAt: now,
     lastConfirmedActiveAt: now,
-    daysListed: 0,
-    staleAfterDays: staleAfterDaysFor(model, cfg),
-    stale: false,
   };
 }

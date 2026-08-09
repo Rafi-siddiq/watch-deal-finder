@@ -61,20 +61,26 @@ export interface Deal {
   fullSet?: boolean;
   /** Reference number if a known format was matched, else undefined. */
   refNumber?: string;
+  /** True when the title matched >1 watchlist model ambiguously — verify the comp. */
+  needsReview?: boolean;
 
   // --- fee-aware profit (see scoring.ts) ---
   /** (median*resaleFactor)*(1-feePct) - shipping - price. Can be negative. */
   estimatedNetProfit: number;
 
-  // --- staleness tracking (filled by the cron from Redis) ---
-  /** Unix ms this listing id was first ever seen by the scanner. */
-  firstSeenAt: number;
-  /** Unix ms this listing was most recently confirmed still active. */
-  lastConfirmedActiveAt: number;
-  /** Whole days between firstSeenAt and now. */
+  // --- listing age (computed from the real SOURCE timestamp, createdAt) ---
+  /** Whole days the listing has existed at the source (now - createdAt). */
   daysListed: number;
   /** daysListed threshold (per liquidity tier) at which this is "stale". */
   staleAfterDays: number;
   /** True once daysListed >= staleAfterDays. */
   stale: boolean;
+  /** "fresh" (<60% of threshold), "aging" (60-100%), "stale" (>=threshold). */
+  ageTier: "fresh" | "aging" | "stale";
+
+  // --- observation record (from Redis; NOT used for age) ---
+  /** Unix ms this listing id was first seen by the scanner. */
+  firstSeenAt: number;
+  /** Unix ms this listing was most recently confirmed still active. */
+  lastConfirmedActiveAt: number;
 }

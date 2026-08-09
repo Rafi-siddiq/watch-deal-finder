@@ -6,14 +6,14 @@ import { watchlist } from "@/lib/watchlist";
 import { trackListing, upsertDeal } from "@/lib/redis";
 import type { RawListing } from "@/lib/types";
 
-const DAY_MS = 24 * 60 * 60 * 1000;
-
 interface SourceResult {
   source: string;
   ok: boolean;
   fetched: number;
   skipped?: boolean;
   error?: string;
+  /** eBay brand searches that failed while others succeeded (partial degradation). */
+  failedBrands?: string[];
 }
 
 /**
@@ -60,10 +60,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     sources.push({ source: "ebay", ok: true, skipped: true, fetched: 0 });
   } else {
     try {
-      const listings = await fetchEbayListings();
+      const { listings, failed, attempted } = await fetchEbayListings();
       allListings.push(...listings);
-      sources.push({ source: "ebay", ok: true, fetched: listings.length });
+      // ok if at least one brand search succeeded; failed brands surfaced but
+      // don't discard the ones that worked.
+      const ebayOk = failed.length < attempted;
+      const r: SourceResult = { source: "ebay", ok: ebayOk, fetched: listings.length };
+      if (failed.length) {
+        r.failedBrands = failed;
+        console.error("[scan-deals] eBay brand searches failed:", failed.join(", "));
+      }
+      sources.push(r);
     } catch (e) {
+      // Only reached if the initial token request itself fails (bad/missing creds).
       const msg = (e as Error).message;
       console.error("[scan-deals] eBay source failed:", msg);
       sources.push({ source: "ebay", ok: false, fetched: 0, error: msg });
@@ -81,50 +90,56 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
   }
 
-  // --- Score, track staleness, upsert ---
-  // Every qualifying deal is tracked (persist first_seen, refresh last_confirmed)
-  // and upserted each run so days-listed / stale / profit stay current — we no
-  // longer drop repeat sightings on dedup.
-  let evaluated = 0;
+  // --- Score, track, upsert ---
+  // daysListed / stale / ageTier are computed in evaluate() off the real source
+  // timestamp (createdAt) — the cron does NOT overwrite them with bot time. We
+  // still track first/last-seen as an observation record, and only count a deal
+  // as "stored" after a successful Redis write so the response can't overclaim.
+  let matched = 0;
+  let stored = 0;
   let newDeals = 0;
   let staleDeals = 0;
 
   for (const listing of allListings) {
     const deal = evaluate(listing, watchlist);
     if (!deal) continue;
-    evaluated++;
+    matched++;
     try {
       const track = await trackListing(listing.source, listing.id);
       deal.firstSeenAt = track.firstSeenAt;
       deal.lastConfirmedActiveAt = track.lastConfirmedActiveAt;
-      // Use the tracker's own timestamps (consistent ordering) so a brand-new
-      // listing reads 0, never a negative from clock skew against outer `now`.
-      deal.daysListed = Math.max(
-        0,
-        Math.floor((track.lastConfirmedActiveAt - track.firstSeenAt) / DAY_MS)
-      );
-      deal.stale = deal.daysListed >= deal.staleAfterDays;
+      await upsertDeal(deal);
+      stored++;
       if (track.isNew) newDeals++;
       if (deal.stale) staleDeals++;
-      await upsertDeal(deal);
     } catch (e) {
       console.error("[scan-deals] track/upsert failed for", listing.id, (e as Error).message);
     }
   }
 
-  const anyOk = sources.some((s) => s.ok);
+  // ok only if at least one source actually ran and succeeded (a "skipped" source
+  // doesn't count). This makes a both-sources-down run report ok:false instead of
+  // claiming success on a run that did nothing.
+  const ok = sources.some((s) => s.ok && !s.skipped);
+  // degraded surfaces partial problems even when ok:true (a source failed, some
+  // eBay brands failed, or we stored fewer than we matched — i.e. Redis dropped some).
+  const degraded =
+    sources.some((s) => !s.ok || (s.failedBrands?.length ?? 0) > 0) || stored < matched;
+
   const body = {
-    ok: anyOk,
+    ok,
+    degraded,
     tookMs: Date.now() - startedAt,
     sources,
     listings: allListings.length,
-    dealsMatched: evaluated,
+    dealsMatched: matched,
+    dealsStored: stored,
     newDeals,
     staleDeals,
-    freshDeals: evaluated - staleDeals,
+    freshDeals: stored - staleDeals,
     marketplaceInsights: insights,
   };
   console.log("[scan-deals] run complete:", JSON.stringify(body));
-  // 200 if at least one source worked; 502 only if everything failed.
-  return res.status(anyOk ? 200 : 502).json(body);
+  // 200 if a real source succeeded; 502 if nothing did.
+  return res.status(ok ? 200 : 502).json(body);
 }

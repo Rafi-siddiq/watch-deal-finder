@@ -16,11 +16,12 @@ const SEARCH_TERMS = ["Omega", "Hamilton", "Frederique Constant", "MAEN", "Seiko
 
 let cachedToken: { token: string; expiresAt: number } | null = null;
 
-async function getToken(scope = BASE_SCOPE): Promise<string> {
+async function getToken(scope = BASE_SCOPE, forceRefresh = false): Promise<string> {
   // Only cache the base-scope token; the insights probe requests its own.
-  if (scope === BASE_SCOPE && cachedToken && Date.now() < cachedToken.expiresAt - 60_000) {
+  if (!forceRefresh && scope === BASE_SCOPE && cachedToken && Date.now() < cachedToken.expiresAt - 60_000) {
     return cachedToken.token;
   }
+  if (forceRefresh) cachedToken = null;
   const clientId = required("EBAY_CLIENT_ID");
   const clientSecret = required("EBAY_CLIENT_SECRET");
   const basic = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
@@ -60,63 +61,91 @@ interface BrowseItem {
   condition?: string;
 }
 
+export interface EbayFetchResult {
+  listings: RawListing[];
+  /** Brand terms whose search failed (the other terms' results are still returned). */
+  failed: string[];
+  /** How many brand terms were attempted (SEARCH_TERMS.length). */
+  attempted: number;
+}
+
+/** One Browse search for a brand term. Returns the raw Response (may be !ok). */
+async function ebaySearch(term: string, token: string, limitPerTerm: number): Promise<Response> {
+  const params = new URLSearchParams({
+    q: term,
+    category_ids: WRISTWATCH_CATEGORY,
+    filter: "buyingOptions:{FIXED_PRICE}",
+    sort: "newlyListed",
+    limit: String(limitPerTerm),
+  });
+  return fetchWithBackoff(`${BROWSE_SEARCH}?${params}`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "X-EBAY-C-MARKETPLACE-ID": MARKETPLACE,
+      "Content-Type": "application/json",
+    },
+  });
+}
+
 /**
- * Search the Browse API scoped to the Wristwatches category (31387) so we don't
- * get straps/tools/parts junk. One request per brand term; results merged.
+ * Search the Browse API (Wristwatches category 31387) once per brand term.
+ * Resilient by design:
+ *  - each brand search is isolated — one failure never discards the others;
+ *  - on a 401 (expired token mid-run), refresh the token ONCE and retry that
+ *    search (fetchWithBackoff only handles 429/5xx, not 401).
+ * Returns whatever succeeded plus the list of failed brand terms.
  */
-export async function fetchEbayListings(limitPerTerm = 25): Promise<RawListing[]> {
-  const token = await getToken();
+export async function fetchEbayListings(limitPerTerm = 25): Promise<EbayFetchResult> {
+  let token = await getToken(); // throws only if creds are missing/invalid
   const out: RawListing[] = [];
   const seen = new Set<string>();
+  const failed: string[] = [];
 
   for (const term of SEARCH_TERMS) {
-    const params = new URLSearchParams({
-      q: term,
-      category_ids: WRISTWATCH_CATEGORY,
-      filter: "buyingOptions:{FIXED_PRICE}",
-      sort: "newlyListed",
-      limit: String(limitPerTerm),
-    });
-    const res = await fetchWithBackoff(`${BROWSE_SEARCH}?${params}`, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "X-EBAY-C-MARKETPLACE-ID": MARKETPLACE,
-        "Content-Type": "application/json",
-      },
-    });
-    if (!res.ok) {
-      throw new Error(`eBay Browse search failed for "${term}": ${res.status} ${await safeText(res)}`);
-    }
-    const json = (await res.json()) as { itemSummaries?: BrowseItem[] };
-    for (const it of json.itemSummaries ?? []) {
-      if (!it.itemId || seen.has(it.itemId)) continue;
-      seen.add(it.itemId);
-      const priceVal = it.price?.value ? Number(it.price.value) : NaN;
-      // Embed the structured price into the body so the shared price parser
-      // (lib/scoring) picks it up uniformly with Reddit listings.
-      const priceText = Number.isFinite(priceVal) ? `Price: $${priceVal}` : "";
-      out.push({
-        source: "ebay",
-        id: it.itemId,
-        title: it.title,
-        body: priceText,
-        url: it.itemWebUrl,
-        createdAt: it.itemCreationDate ? Date.parse(it.itemCreationDate) : Date.now(),
-        // Leaf category lets the scorer drop accessory listings (straps/belts/
-        // parts) that keyword-match a brand but aren't wristwatches.
-        leafCategoryIds: it.leafCategoryIds,
-        // Images already present in the search response — no extra API calls.
-        imageUrl: it.image?.imageUrl,
-        additionalImageUrls: (it.additionalImages ?? [])
-          .map((img) => img?.imageUrl)
-          .filter((u): u is string => Boolean(u))
-          .slice(0, 3),
-        // Structured condition from the Browse API (e.g. "Pre-owned", "New").
-        condition: it.condition,
-      });
+    try {
+      let res = await ebaySearch(term, token, limitPerTerm);
+      if (res.status === 401) {
+        // Token likely expired mid-run — refresh once and retry this search.
+        token = await getToken(BASE_SCOPE, true);
+        res = await ebaySearch(term, token, limitPerTerm);
+      }
+      if (!res.ok) {
+        throw new Error(`${res.status} ${await safeText(res)}`);
+      }
+      const json = (await res.json()) as { itemSummaries?: BrowseItem[] };
+      for (const it of json.itemSummaries ?? []) {
+        if (!it.itemId || seen.has(it.itemId)) continue;
+        seen.add(it.itemId);
+        const priceVal = it.price?.value ? Number(it.price.value) : NaN;
+        // Embed the structured price into the body so the shared price parser
+        // (lib/scoring) picks it up uniformly with Reddit listings.
+        const priceText = Number.isFinite(priceVal) ? `Price: $${priceVal}` : "";
+        out.push({
+          source: "ebay",
+          id: it.itemId,
+          title: it.title,
+          body: priceText,
+          url: it.itemWebUrl,
+          createdAt: it.itemCreationDate ? Date.parse(it.itemCreationDate) : Date.now(),
+          // Leaf category lets the scorer drop accessory listings (straps/belts/
+          // parts) that keyword-match a brand but aren't wristwatches.
+          leafCategoryIds: it.leafCategoryIds,
+          // Images already present in the search response — no extra API calls.
+          imageUrl: it.image?.imageUrl,
+          additionalImageUrls: (it.additionalImages ?? [])
+            .map((img) => img?.imageUrl)
+            .filter((u): u is string => Boolean(u))
+            .slice(0, 3),
+          // Structured condition from the Browse API (e.g. "Pre-owned", "New").
+          condition: it.condition,
+        });
+      }
+    } catch (e) {
+      console.error(`[ebay] search "${term}" failed:`, (e as Error).message);
+      failed.push(term);
     }
   }
-  return out;
+  return { listings: out, failed, attempted: SEARCH_TERMS.length };
 }
 
 /**
