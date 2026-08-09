@@ -55,6 +55,8 @@ interface BrowseItem {
   itemWebUrl: string;
   itemCreationDate?: string;
   leafCategoryIds?: string[];
+  image?: { imageUrl?: string };
+  additionalImages?: { imageUrl?: string }[];
 }
 
 /**
@@ -102,6 +104,12 @@ export async function fetchEbayListings(limitPerTerm = 25): Promise<RawListing[]
         // Leaf category lets the scorer drop accessory listings (straps/belts/
         // parts) that keyword-match a brand but aren't wristwatches.
         leafCategoryIds: it.leafCategoryIds,
+        // Images already present in the search response — no extra API calls.
+        imageUrl: it.image?.imageUrl,
+        additionalImageUrls: (it.additionalImages ?? [])
+          .map((img) => img?.imageUrl)
+          .filter((u): u is string => Boolean(u))
+          .slice(0, 3),
       });
     }
   }

@@ -11,6 +11,10 @@ export interface RawListing {
   createdAt: number;
   /** eBay leaf category ids (e.g. ["31387"] = Wristwatches). Absent for Reddit. */
   leafCategoryIds?: string[];
+  /** Primary listing image, if the source provided one. */
+  imageUrl?: string;
+  /** Up to a few extra images (first 2-3), if available. */
+  additionalImageUrls?: string[];
 }
 
 export interface WatchModel {
@@ -41,6 +45,12 @@ export interface Deal {
   score: number; // 0-100
   foundAt: number; // Unix ms when this run flagged it
   createdAt: number; // listing creation time at source
+
+  // --- listing images (for the dashboard to display) ---
+  /** Primary listing image, if available. */
+  imageUrl?: string;
+  /** Up to a few extra images (first 2-3), if available. */
+  additionalImageUrls?: string[];
 
   // --- fee-aware profit (see scoring.ts) ---
   /** (median*resaleFactor)*(1-feePct) - shipping - price. Can be negative. */

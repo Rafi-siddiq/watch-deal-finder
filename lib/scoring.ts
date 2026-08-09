@@ -277,6 +277,8 @@ export function evaluate(listing: RawListing, watchlist: Watchlist): Deal | null
     score,
     foundAt: now,
     createdAt: listing.createdAt || now,
+    imageUrl: listing.imageUrl,
+    additionalImageUrls: listing.additionalImageUrls,
     estimatedNetProfit,
     // Provisional staleness — the cron replaces these from the Redis record.
     firstSeenAt: now,
