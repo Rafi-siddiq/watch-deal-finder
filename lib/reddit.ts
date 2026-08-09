@@ -63,7 +63,31 @@ interface RedditChild {
     permalink: string;
     url: string;
     created_utc: number;
+    thumbnail?: string;
+    preview?: { images?: { source?: { url?: string } }[] };
   };
+}
+
+/** Reddit HTML-escapes ampersands (&amp;) in preview/thumbnail URLs — undo that. */
+function htmlUnescape(s: string): string {
+  return s
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#(?:39|x27);/g, "'");
+}
+
+/**
+ * Best listing image for a Reddit post: the full-res preview if present, else a
+ * real thumbnail (Reddit uses sentinels like "self"/"default"/"nsfw" for posts
+ * without one). Returns undefined when there's no usable image.
+ */
+function redditImageUrl(d: RedditChild["data"]): string | undefined {
+  const preview = d.preview?.images?.[0]?.source?.url;
+  if (preview) return htmlUnescape(preview);
+  if (d.thumbnail && /^https?:\/\//i.test(d.thumbnail)) return htmlUnescape(d.thumbnail);
+  return undefined;
 }
 
 /**
@@ -97,6 +121,7 @@ export async function fetchRedditListings(limit = 50): Promise<RawListing[]> {
         body: d.selftext || "",
         url: `https://www.reddit.com${d.permalink}`,
         createdAt: Math.round((d.created_utc || 0) * 1000),
+        imageUrl: redditImageUrl(d),
       });
     }
   }
