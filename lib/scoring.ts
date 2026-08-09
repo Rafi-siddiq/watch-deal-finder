@@ -180,6 +180,54 @@ function inBand(n: number): boolean {
 }
 
 /**
+ * Extract a watch reference number if it matches a known format, else undefined
+ * (we return undefined rather than guessing wrong). Uppercase-sensitive to avoid
+ * matching ordinary lowercase words.
+ * - Omega multi-dot:   311.30.42.30.01.005, 2581.31.00
+ * - Omega older 4+2:   2562.60, 2552.80, 2531.80
+ * - Seiko / GS alnum:  SPB143, SBGA211, SKX007, SNK809
+ * - Tudor/Rolex:       79030N, 116610LN  (a lone trailing "M"/"MM" is a size/
+ *                      depth like 1200M/40MM, not a ref — rejected)
+ */
+export function parseRefNumber(text: string): string | undefined {
+  const dotted = text.match(/\b\d{3,4}(?:\.\d{2,3}){2,5}\b/);
+  if (dotted) return dotted[0];
+  // Older Omega XXXX.XX refs (eBay titles don't carry bare prices, so a 4.2
+  // token here is a reference, not a price).
+  const omega42 = text.match(/\b\d{4}\.\d{2}\b/);
+  if (omega42) return omega42[0];
+  const alnum = text.match(/\b[A-Z]{2,4}\d{3,5}[A-Z]?\b/);
+  if (alnum) return alnum[0];
+  const numLetter = text.match(/\b\d{4,6}[A-Z]{1,2}\b/);
+  if (numLetter && !/^\d+MM?$/i.test(numLetter[0])) return numLetter[0];
+  return undefined;
+}
+
+/** true = box/papers/full set; false = explicitly "watch only"; undefined = unstated. */
+export function parseFullSet(text: string): boolean | undefined {
+  if (/\b(?:full set|complete set|box\s*(?:and|&)\s*papers)\b/i.test(text)) return true;
+  if (/\bwatch only\b/i.test(text)) return false;
+  return undefined;
+}
+
+// Longest/most-specific terms first so "near mint" beats "mint", etc.
+const CONDITION_TERMS = [
+  "near mint", "mint", "excellent", "very good", "good", "fair", "worn",
+  "brand new", "new",
+];
+
+/** Loosely parse a condition word from free text (Reddit fallback); else undefined. */
+export function parseConditionText(text: string): string | undefined {
+  const lower = text.toLowerCase();
+  for (const term of CONDITION_TERMS) {
+    if (new RegExp(`\\b${term}\\b`).test(lower)) {
+      return term.replace(/\b\w/g, (c) => c.toUpperCase());
+    }
+  }
+  return undefined;
+}
+
+/**
  * First watchlist model whose alias appears in the listing text (case-insensitive).
  * Homage/tribute/"inspired by"/style listings are disqualified even when a brand
  * alias appears — a "MAEN Homage" is not a MAEN.
@@ -264,6 +312,12 @@ export function evaluate(listing: RawListing, watchlist: Watchlist): Deal | null
   const score = scoreDeal(discount, model, watchlist.scoreWeights);
   const now = Date.now();
 
+  // Listing detail fields — parsed from text; undefined when not confident.
+  const text = `${listing.title} ${listing.body}`;
+  const refNumber = parseRefNumber(text);
+  const fullSet = parseFullSet(text);
+  const condition = listing.condition ?? parseConditionText(text);
+
   return {
     source: listing.source,
     id: listing.id,
@@ -279,6 +333,9 @@ export function evaluate(listing: RawListing, watchlist: Watchlist): Deal | null
     createdAt: listing.createdAt || now,
     imageUrl: listing.imageUrl,
     additionalImageUrls: listing.additionalImageUrls,
+    condition,
+    fullSet,
+    refNumber,
     estimatedNetProfit,
     // Provisional staleness — the cron replaces these from the Redis record.
     firstSeenAt: now,

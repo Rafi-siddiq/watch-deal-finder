@@ -15,6 +15,8 @@ export interface RawListing {
   imageUrl?: string;
   /** Up to a few extra images (first 2-3), if available. */
   additionalImageUrls?: string[];
+  /** Structured condition from the source (eBay Browse API). Reddit has none. */
+  condition?: string;
 }
 
 export interface WatchModel {
@@ -51,6 +53,14 @@ export interface Deal {
   imageUrl?: string;
   /** Up to a few extra images (first 2-3), if available. */
   additionalImageUrls?: string[];
+
+  // --- listing details parsed at scoring time (undefined when not confident) ---
+  /** Condition — eBay structured value, else loosely parsed (Reddit). */
+  condition?: string;
+  /** True: "full set"/"box & papers"; false: "watch only"; undefined: unstated. */
+  fullSet?: boolean;
+  /** Reference number if a known format was matched, else undefined. */
+  refNumber?: string;
 
   // --- fee-aware profit (see scoring.ts) ---
   /** (median*resaleFactor)*(1-feePct) - shipping - price. Can be negative. */

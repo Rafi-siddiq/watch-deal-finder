@@ -57,6 +57,7 @@ interface BrowseItem {
   leafCategoryIds?: string[];
   image?: { imageUrl?: string };
   additionalImages?: { imageUrl?: string }[];
+  condition?: string;
 }
 
 /**
@@ -110,6 +111,8 @@ export async function fetchEbayListings(limitPerTerm = 25): Promise<RawListing[]
           .map((img) => img?.imageUrl)
           .filter((u): u is string => Boolean(u))
           .slice(0, 3),
+        // Structured condition from the Browse API (e.g. "Pre-owned", "New").
+        condition: it.condition,
       });
     }
   }
