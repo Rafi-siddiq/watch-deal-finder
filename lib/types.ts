@@ -68,6 +68,10 @@ export interface Deal {
   /** (median*resaleFactor)*(1-feePct) - shipping - price. Can be negative. */
   estimatedNetProfit: number;
 
+  // --- budget ---
+  /** price <= MAX_PURCHASE_PRICE. Over-budget deals are flagged, not filtered. */
+  withinBudget: boolean;
+
   // --- listing age (computed from the real SOURCE timestamp, createdAt) ---
   /** Whole days the listing has existed at the source (now - createdAt). */
   daysListed: number;

@@ -95,13 +95,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // timestamp (createdAt) — the cron does NOT overwrite them with bot time. We
   // still track first/last-seen as an observation record, and only count a deal
   // as "stored" after a successful Redis write so the response can't overclaim.
+  // Available capital right now. Unset/blank/invalid => no constraint (Infinity),
+  // so every deal reads within budget. Kept in env (not the public watchlist).
+  const rawBudget = process.env.MAX_PURCHASE_PRICE;
+  const maxPurchasePrice =
+    rawBudget && Number.isFinite(Number(rawBudget)) ? Number(rawBudget) : Infinity;
+
   let matched = 0;
   let stored = 0;
   let newDeals = 0;
   let staleDeals = 0;
+  let withinBudget = 0;
+  let overBudget = 0;
 
   for (const listing of allListings) {
-    const deal = evaluate(listing, watchlist);
+    const deal = evaluate(listing, watchlist, maxPurchasePrice);
     if (!deal) continue;
     matched++;
     try {
@@ -112,6 +120,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       stored++;
       if (track.isNew) newDeals++;
       if (deal.stale) staleDeals++;
+      if (deal.withinBudget) withinBudget++;
+      else overBudget++;
     } catch (e) {
       console.error("[scan-deals] track/upsert failed for", listing.id, (e as Error).message);
     }
@@ -137,6 +147,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     newDeals,
     staleDeals,
     freshDeals: stored - staleDeals,
+    maxPurchasePrice: maxPurchasePrice === Infinity ? null : maxPurchasePrice,
+    withinBudget,
+    overBudget,
     marketplaceInsights: insights,
   };
   console.log("[scan-deals] run complete:", JSON.stringify(body));

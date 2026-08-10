@@ -320,7 +320,11 @@ function clamp01(n: number): number {
  * Staleness fields (firstSeenAt / lastConfirmedActiveAt / daysListed / stale) are
  * set provisionally to "just seen now"; the cron overwrites them from Redis.
  */
-export function evaluate(listing: RawListing, watchlist: Watchlist): Deal | null {
+export function evaluate(
+  listing: RawListing,
+  watchlist: Watchlist,
+  maxPurchasePrice = Infinity
+): Deal | null {
   const cfg = watchlist as WatchlistFilters;
 
   // 1) Junk/parts/condition exclusion — cheap because broken, not a good buy.
@@ -403,6 +407,7 @@ export function evaluate(listing: RawListing, watchlist: Watchlist): Deal | null
     refNumber,
     needsReview,
     estimatedNetProfit,
+    withinBudget: price <= maxPurchasePrice,
     daysListed,
     staleAfterDays,
     stale,
