@@ -9,6 +9,7 @@ const MAX_PRICE = 200000;
  */
 type WatchlistFilters = Watchlist & {
   excludeTitleTerms?: string[];
+  noveltyTerms?: string[];
   matchExcludeTerms?: string[];
   vintageTerms?: string[];
   accessoryTerms?: string[];
@@ -44,6 +45,28 @@ function buildTermRegex(terms?: string[]): RegExp | null {
 function isExcludedByTitle(listing: RawListing, cfg: WatchlistFilters): boolean {
   const re = buildTermRegex(cfg.excludeTitleTerms);
   return re ? re.test(listing.title) : false;
+}
+
+/**
+ * True if the title names a non-watch novelty item (USB figure, keychain, poster,
+ * replica, …). Overrides a brand/model match — a "Speedmaster USB figure" is not
+ * a Speedmaster. Whole-word matched via the same mechanism as the junk filter.
+ */
+function isNovelty(listing: RawListing, cfg: WatchlistFilters): boolean {
+  const re = buildTermRegex(cfg.noveltyTerms);
+  return re ? re.test(listing.title) : false;
+}
+
+// A movement caliber ("Cal.1012", "Calibre 321") or an old 3+3 Omega reference
+// ("166.130") signals a possibly-vintage piece. Neither is a reliable
+// vintage-ONLY marker (modern watches cite calibers too, e.g. Cal.3861), so these
+// set needsReview rather than hard-excluding.
+const CALIBER_RE = /\bcal(?:ibre)?\.?\s*\d{2,4}\b/i;
+const SHORT_OMEGA_REF_RE = /\b\d{3}\.\d{3}\b/;
+
+/** True if the text carries a caliber or old 3+3 reference — flag for review. */
+function hasVintageSignal(text: string): boolean {
+  return CALIBER_RE.test(text) || SHORT_OMEGA_REF_RE.test(text);
 }
 
 /**
@@ -197,6 +220,10 @@ export function parseRefNumber(text: string): string | undefined {
   // token here is a reference, not a price).
   const omega42 = text.match(/\b\d{4}\.\d{2}\b/);
   if (omega42) return omega42[0];
+  // Vintage Omega 3+3 refs, e.g. 166.130, 145.022 (distinct from prices and from
+  // depth ratings like 300M — those aren't dot-separated 3+3).
+  const omega33 = text.match(/\b\d{3}\.\d{3}\b/);
+  if (omega33) return omega33[0];
   const alnum = text.match(/\b[A-Z]{2,4}\d{3,5}[A-Z]?\b/);
   if (alnum) return alnum[0];
   const numLetter = text.match(/\b\d{4,6}[A-Z]{1,2}\b/);
@@ -303,10 +330,14 @@ export function evaluate(listing: RawListing, watchlist: Watchlist): Deal | null
   //     accessories a seller miscategorized under Wristwatches.
   if (isBareAccessory(listing, cfg)) return null;
 
+  // 1c) Novelty/non-watch guard — USB figures, keychains, replicas, etc. Overrides
+  //     a brand/model match: a "Speedmaster USB figure" is not a Speedmaster.
+  if (isNovelty(listing, cfg)) return null;
+
   // 2) Model match (specificity-ranked; rejects homage/tribute/style listings).
   const matched = matchModelDetailed(listing, watchlist);
   if (!matched) return null;
-  const { model, needsReview } = matched;
+  const { model, needsReview: ambiguousMatch } = matched;
 
   // 3) Vintage exclusion — a 1960s piece shouldn't be scored against a modern median.
   if (isVintage(listing, cfg)) return null;
@@ -337,6 +368,10 @@ export function evaluate(listing: RawListing, watchlist: Watchlist): Deal | null
   const refNumber = parseRefNumber(text);
   const fullSet = parseFullSet(text);
   const condition = listing.condition ?? parseConditionText(text);
+
+  // needsReview: ambiguous model match OR a possibly-vintage signal (caliber /
+  // old 3+3 ref) that we won't hard-exclude but the median may be wrong for.
+  const needsReview = ambiguousMatch || hasVintageSignal(text);
 
   // Age from the REAL SOURCE timestamp (createdAt = eBay itemCreationDate /
   // Reddit created_utc), NOT bot-observation time — so a listing that existed
