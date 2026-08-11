@@ -373,9 +373,10 @@ export function evaluate(
   const fullSet = parseFullSet(text);
   const condition = listing.condition ?? parseConditionText(text);
 
-  // needsReview: ambiguous model match OR a possibly-vintage signal (caliber /
-  // old 3+3 ref) that we won't hard-exclude but the median may be wrong for.
-  const needsReview = ambiguousMatch || hasVintageSignal(text);
+  // needsReview: ambiguous model match, a possibly-vintage signal (caliber / old
+  // 3+3 ref), OR a model flagged needsReview in the config (unverified / broad band).
+  const needsReview =
+    ambiguousMatch || hasVintageSignal(text) || Boolean((model as { needsReview?: boolean }).needsReview);
 
   // Age from the REAL SOURCE timestamp (createdAt = eBay itemCreationDate /
   // Reddit created_utc), NOT bot-observation time — so a listing that existed

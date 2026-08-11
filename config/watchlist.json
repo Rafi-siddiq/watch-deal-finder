@@ -1,12 +1,9 @@
 {
-  "_comment": "Hand-editable. `median` is the resale value the scorer compares against. `liquidity` is a manual 1-5 tier (5 = very commonly traded / easy to flip, 1 = niche). Prices are rough USD estimates for the SECONDARY market — correct these with real comps. `aliases` are lowercase substrings matched against listing titles. FILTERS: `excludeTitleTerms` reject a listing outright when its title contains one (junk/parts/condition words). `noveltyTerms` reject non-watch novelty items (USB figures, keychains, posters, replicas, etc.) even when a brand/model name matches. NOTE: bare 'manual'/'display'/'pin'/'coin' were intentionally NOT included — they collide with legit watch terms (manual wind, display caseback, pin buckle, coin-edge bezel); specific phrases like 'instruction manual'/'lapel pin'/'challenge coin' are used instead. `matchExcludeTerms` disqualify a brand match even if the alias appears (homage/tribute listings). `vintageTerms` mark a listing as vintage so it isn't scored against the modern median (the scorer also treats any 19xx year/decade in the title as vintage). All matched as whole words, case-insensitive. `accessoryTerms` + `watchIndicativeTerms`: drop a listing whose title has an accessory word (belt/band/strap) UNLESS it also has a watch-indicative term (automatic/quartz/…/a size like 40mm) — catches straps/belts a seller miscategorized under Wristwatches, without dropping real watches that mention a bracelet/band. `allowedLeafCategoryIds` keeps only eBay items whose leaf category is a real wristwatch category (excludes straps/belts/parts by CATEGORY, not title). `staleDaysByLiquidity` maps a model's liquidity tier (1-5) to the days-listed threshold at which a still-present listing is flagged stale (high-liquidity brands get longer since they normally move fast). `profit`: estimatedNetProfit = median*resaleFactor*(1-ebayFeePct) - shippingEstimate - price; listings under `minNetProfit` are filtered out (this is IN ADDITION to the discount-% threshold).",
+  "_comment": "DRAFT — sub-model tiers. Config blocks preserved verbatim from live. `needsReview: true` on a model forces every matched deal to needsReview (requires a 1-line evaluate() change to honor it). `note` documents trust level. profit.channels: fee fraction per resale channel (direct = PayPal G&S ~2.9% + $0.30 on a typical sale; encoded as pct + flat). Default channel is ebay.",
   "dealThreshold": 0.75,
-  "scoreWeights": {
-    "discount": 0.7,
-    "liquidity": 0.3
-  },
+  "scoreWeights": { "discount": 0.7, "liquidity": 0.3 },
   "excludeTitleTerms": ["parts", "junk", "broken", "for repair", "as is", "as-is", "not working", "accessories", "accessory"],
-  "noveltyTerms": ["usb", "figure", "toy", "keychain", "sign", "poster", "booklet", "replica", "patch", "stamp", "model kit", "lapel pin", "enamel pin", "challenge coin", "instruction manual"],
+  "noveltyTerms": ["usb", "figure", "toy", "keychain", "sign", "poster", "booklet", "replica", "patch", "stamp", "model kit", "lapel pin", "enamel pin", "challenge coin", "instruction manual", "moonswatch", "swatch"],
   "matchExcludeTerms": ["homage", "tribute", "inspired by", "style"],
   "vintageTerms": ["vintage"],
   "accessoryTerms": ["belt", "band", "strap"],
@@ -17,71 +14,100 @@
     "resaleFactor": 0.85,
     "ebayFeePct": 0.15,
     "shippingEstimate": 35,
-    "minNetProfit": 150
+    "minNetProfit": 150,
+    "channels": {
+      "ebay": { "feePct": 0.15, "feeFlat": 0 },
+      "direct": { "feePct": 0.029, "feeFlat": 0.30 }
+    },
+    "defaultChannel": "ebay"
   },
   "models": [
     {
-      "brand": "Omega",
-      "model": "Seamaster",
-      "aliases": ["omega seamaster", "seamaster", "aqua terra", "planet ocean"],
-      "resale": { "low": 2200, "median": 3200, "high": 4500 },
-      "liquidity": 5
+      "brand": "Omega", "model": "Speedmaster Pro",
+      "aliases": ["speedmaster professional", "speedmaster moonwatch", "moonwatch", "speedmaster pro"],
+      "resale": { "low": 4700, "median": 5800, "high": 6700 }, "liquidity": 5
     },
     {
-      "brand": "Omega",
-      "model": "Speedmaster",
-      "aliases": ["omega speedmaster", "speedmaster", "speedy"],
-      "resale": { "low": 3000, "median": 4200, "high": 6000 },
-      "liquidity": 5
+      "brand": "Omega", "model": "Speedmaster (modern, non-Pro)",
+      "aliases": ["speedmaster", "speedmaster reduced", "speedmaster racing", "speedmaster 57", "speedmaster '57", "dark side of the moon", "speedmaster dark side"],
+      "resale": { "low": 2200, "median": 3000, "high": 4500 }, "liquidity": 4,
+      "needsReview": true, "note": "BROAD — spans Reduced (~$2k) to Dark Side (~$8k); single median is rough, flagged for review"
     },
     {
-      "brand": "Tudor",
-      "model": "Black Bay",
-      "aliases": ["tudor black bay", "black bay", "tudor bb", "pelagos"],
-      "resale": { "low": 2400, "median": 3100, "high": 4200 },
-      "liquidity": 5
+      "brand": "Omega", "model": "Speedmaster Vintage (pre-1980s)",
+      "aliases": ["speedmaster 145.022", "speedmaster 105.012", "speedmaster 105.003", "speedmaster 321", "speedmaster cal 321", "pre-moon speedmaster", "speedmaster ck2998"],
+      "resale": { "low": 5000, "median": 8000, "high": 15000 }, "liquidity": 2,
+      "needsReview": true, "note": "wide/provenance-dependent"
     },
     {
-      "brand": "Hamilton",
-      "model": "Khaki Field",
-      "aliases": ["hamilton khaki", "khaki field", "hamilton field"],
-      "resale": { "low": 320, "median": 450, "high": 650 },
-      "liquidity": 4
+      "brand": "Omega", "model": "Seamaster",
+      "aliases": ["seamaster", "aqua terra", "planet ocean", "seamaster diver", "seamaster professional"],
+      "resale": { "low": 2200, "median": 3200, "high": 4500 }, "liquidity": 5,
+      "needsReview": true, "note": "UNVERIFIED — 4x spread, needs sub-model split; median not trustworthy"
     },
     {
-      "brand": "Hamilton",
-      "model": "Intra-Matic",
-      "aliases": ["intra-matic", "intramatic", "hamilton intra"],
-      "resale": { "low": 500, "median": 700, "high": 950 },
-      "liquidity": 3
+      "brand": "Tudor", "model": "Black Bay 58 (79030N)",
+      "aliases": ["black bay 58", "bb58", "black bay fifty-eight", "79030"],
+      "resale": { "low": 3000, "median": 3700, "high": 4700 }, "liquidity": 5
     },
     {
-      "brand": "Seiko",
-      "model": "Prospex / SKX",
+      "brand": "Tudor", "model": "Black Bay (other)",
+      "aliases": ["black bay", "pelagos", "tudor bb", "black bay gmt", "black bay pro", "black bay chrono", "black bay 41", "black bay 36", "black bay 54", "black bay ceramic"],
+      "resale": { "low": 2400, "median": 3200, "high": 4200 }, "liquidity": 5,
+      "needsReview": true, "note": "BROAD — Pelagos / BB41 / BB GMT / BB Pro etc.; wide band, low confidence"
+    },
+    {
+      "brand": "Hamilton", "model": "Khaki Field Core",
+      "aliases": ["khaki field", "khaki field auto", "khaki field mechanical", "khaki king", "khaki field murph", "murph"],
+      "resale": { "low": 380, "median": 460, "high": 620 }, "liquidity": 4
+    },
+    {
+      "brand": "Hamilton", "model": "Khaki Field Expedition/Aviation/Navy",
+      "aliases": ["khaki field expedition", "khaki expedition", "khaki aviation", "khaki navy", "khaki pilot"],
+      "resale": { "low": 500, "median": 650, "high": 850 }, "liquidity": 3
+    },
+    {
+      "brand": "Hamilton", "model": "Intra-Matic Base (non-chrono)",
+      "aliases": ["intra-matic", "intramatic"],
+      "resale": { "low": 400, "median": 550, "high": 730 }, "liquidity": 3
+    },
+    {
+      "brand": "Hamilton", "model": "Intra-Matic 68 Chrono",
+      "aliases": ["intra-matic 68", "intramatic 68", "intra-matic chronograph", "intra-matic auto chronograph"],
+      "resale": { "low": 1200, "median": 1350, "high": 1450 }, "liquidity": 2
+    },
+    {
+      "brand": "Seiko", "model": "Prospex / SKX",
       "aliases": ["seiko prospex", "prospex", "skx", "seiko turtle", "seiko samurai", "seiko willard"],
-      "resale": { "low": 250, "median": 380, "high": 600 },
-      "liquidity": 5
+      "resale": { "low": 250, "median": 380, "high": 600 }, "liquidity": 5,
+      "note": "kept as-is; plausibly fine for used per research (asking skewed by new-with-box)"
     },
     {
-      "brand": "Seiko",
-      "model": "Presage",
+      "brand": "Seiko", "model": "Presage Cocktail Time (base)",
       "aliases": ["seiko presage", "presage", "cocktail time"],
-      "resale": { "low": 280, "median": 420, "high": 650 },
-      "liquidity": 4
+      "resale": { "low": 270, "median": 320, "high": 410 }, "liquidity": 4
     },
     {
-      "brand": "Frederique Constant",
-      "model": "Classics / Slimline",
-      "aliases": ["frederique constant", "frederique", "slimline"],
-      "resale": { "low": 450, "median": 700, "high": 1100 },
-      "liquidity": 2
+      "brand": "Seiko", "model": "Presage Sharp Edged / Classic Series",
+      "aliases": ["presage sharp edged", "sharp edged", "presage classic series", "presage classic"],
+      "resale": { "low": 670, "median": 750, "high": 850 }, "liquidity": 2
     },
     {
-      "brand": "MAEN",
-      "model": "Hudson / Skindiver",
+      "brand": "Frederique Constant", "model": "Classics Index / Business Timer (base)",
+      "aliases": ["frederique constant", "frederique", "classics index", "business timer"],
+      "resale": { "low": 430, "median": 490, "high": 600 }, "liquidity": 2
+    },
+    {
+      "brand": "Frederique Constant", "model": "Classics Manufacture / Moonphase (high tier)",
+      "aliases": ["frederique constant manufacture", "classics manufacture", "slimline manufacture", "moonphase manufacture", "manufacture moonphase", "frederique constant moonphase", "classics moonphase", "slimline moonphase", "heart beat manufacture", "worldtimer manufacture"],
+      "resale": { "low": 1290, "median": 1600, "high": 1930 }, "liquidity": 1,
+      "note": "MATCHER GAP (revisit if these appear often): a bare 'Slimline Moonphase' without 'manufacture' falls to the FC base tier (length-based matcher; brand alias outranks the short distinguisher). Conservative under-valuation, not a false flag."
+    },
+    {
+      "brand": "MAEN", "model": "Hudson / Skindiver",
       "aliases": ["maen hudson", "maen skindiver", "maen watches", "maen "],
-      "resale": { "low": 260, "median": 380, "high": 520 },
-      "liquidity": 2
+      "resale": { "low": 260, "median": 380, "high": 520 }, "liquidity": 2,
+      "needsReview": true, "note": "UNVERIFIED — eBay sample too thin; number not trustworthy"
     }
   ]
 }
