@@ -40,10 +40,25 @@
       "needsReview": true, "note": "wide/provenance-dependent"
     },
     {
-      "brand": "Omega", "model": "Seamaster",
-      "aliases": ["seamaster", "aqua terra", "planet ocean", "seamaster diver", "seamaster professional"],
+      "brand": "Omega", "model": "Seamaster Diver 300M",
+      "aliases": ["300m", "diver 300", "diver 300m", "seamaster 300m", "seamaster professional 300", "seamaster professional 300m", "smp", "210.30"],
+      "resale": { "low": 3500, "median": 4500, "high": 5800 }, "liquidity": 5
+    },
+    {
+      "brand": "Omega", "model": "Seamaster Aqua Terra",
+      "aliases": ["aqua terra", "150m", "at150", "220.1", "231.1"],
+      "resale": { "low": 2900, "median": 3900, "high": 5200 }, "liquidity": 4
+    },
+    {
+      "brand": "Omega", "model": "Seamaster Planet Ocean",
+      "aliases": ["planet ocean", "600m", "po600", "215.", "232."],
+      "resale": { "low": 2600, "median": 3600, "high": 5200 }, "liquidity": 3
+    },
+    {
+      "brand": "Omega", "model": "Seamaster (other/unclear)",
+      "aliases": ["seamaster", "seamaster professional"],
       "resale": { "low": 2200, "median": 3200, "high": 4500 }, "liquidity": 5,
-      "needsReview": true, "note": "UNVERIFIED — 4x spread, needs sub-model split; median not trustworthy"
+      "needsReview": true, "note": "catch-all for Seamaster listings that don't clearly indicate line; median rough"
     },
     {
       "brand": "Tudor", "model": "Black Bay 58 (79030N)",
