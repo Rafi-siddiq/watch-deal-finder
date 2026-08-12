@@ -22,6 +22,8 @@ type WatchlistFilters = Watchlist & {
     shippingEstimate?: number;
     minNetProfit?: number;
   };
+  underDescribed?: { minTitleWords?: number };
+  seasonalBoost?: { months?: number[]; multiplier?: number };
 };
 
 const DEFAULT_STALE_DAYS = 14;
@@ -364,7 +366,7 @@ export function evaluate(
   const minNetProfit = cfg.profit?.minNetProfit ?? DEFAULT_PROFIT.minNetProfit;
   if (estimatedNetProfit < minNetProfit) return null;
 
-  const score = scoreDeal(discount, model, watchlist.scoreWeights);
+  const baseScore = scoreDeal(discount, model, watchlist.scoreWeights);
   const now = Date.now();
 
   // Listing detail fields — parsed from text; undefined when not confident.
@@ -372,6 +374,26 @@ export function evaluate(
   const refNumber = parseRefNumber(text);
   const fullSet = parseFullSet(text);
   const condition = listing.condition ?? parseConditionText(text);
+
+  // Seasonal timing weight — a small SCORE boost (not the discount math) inside a
+  // configurable month window (default Jan-Feb post-holiday cash crunch).
+  const month = new Date(now).getMonth() + 1; // 1-12
+  const sb = cfg.seasonalBoost;
+  const scoreModifier =
+    sb && Array.isArray(sb.months) && sb.months.includes(month) ? sb.multiplier ?? 1 : 1;
+  const score = Math.min(100, Math.round(baseScore * scoreModifier));
+
+  // underDescribed — thin-information research signal (does NOT change score).
+  // True when the listing is missing >=3 of: stated condition, box/papers mention,
+  // a reference number, a descriptive-length title.
+  const titleWords = listing.title.trim().split(/\s+/).filter(Boolean).length;
+  const minWords = cfg.underDescribed?.minTitleWords ?? 7;
+  const missingSignals =
+    (condition ? 0 : 1) +
+    (fullSet === undefined ? 1 : 0) +
+    (refNumber ? 0 : 1) +
+    (titleWords < minWords ? 1 : 0);
+  const underDescribed = missingSignals >= 3;
 
   // needsReview: ambiguous model match, a possibly-vintage signal (caliber / old
   // 3+3 ref), OR a model flagged needsReview in the config (unverified / broad band).
@@ -399,6 +421,8 @@ export function evaluate(
     median,
     discount,
     score,
+    scoreModifier,
+    underDescribed,
     foundAt: now,
     createdAt,
     imageUrl: listing.imageUrl,

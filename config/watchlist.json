@@ -21,6 +21,8 @@
     },
     "defaultChannel": "ebay"
   },
+  "underDescribed": { "minTitleWords": 7 },
+  "seasonalBoost": { "months": [1, 2], "multiplier": 1.08, "note": "post-holiday cash-crunch window; small score boost only, not the discount math" },
   "models": [
     {
       "brand": "Omega", "model": "Speedmaster Pro",

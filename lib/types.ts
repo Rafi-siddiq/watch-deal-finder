@@ -44,7 +44,11 @@ export interface Deal {
   median: number;
   /** 0..1, how far below median (0.30 = 30% under median). */
   discount: number;
-  score: number; // 0-100
+  score: number; // 0-100 (after any scoreModifier is applied)
+  /** Multiplier applied to the base score (e.g. 1.08 in the seasonal window, else 1.0). */
+  scoreModifier: number;
+  /** True when the listing is thin on descriptive info (research signal; does NOT change score). */
+  underDescribed: boolean;
   foundAt: number; // Unix ms when this run flagged it
   createdAt: number; // listing creation time at source
 
