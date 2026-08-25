@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test:matcher": "node scripts/matcher-regression.ts"
   },
   "dependencies": {
     "@upstash/redis": "^1.38.2",

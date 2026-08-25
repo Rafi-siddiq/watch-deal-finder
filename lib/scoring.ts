@@ -258,12 +258,33 @@ export function parseConditionText(text: string): string | undefined {
 }
 
 /**
+ * A "generic" alias identifies the brand/depth but NOT a specific model:
+ *  - a bare depth/size token ("150m", "300m", "600m", "40mm")
+ *  - the brand name or a prefix of it ("frederique", "frederique constant")
+ * A match via only generic aliases means "right brand, model unclear" — it must
+ * not produce a confident score (see matchModelDetailed).
+ */
+function isGenericAlias(alias: string, brand: string): boolean {
+  const a = alias.trim().toLowerCase();
+  const b = brand.toLowerCase();
+  if (/^\d{2,4}\s?mm?$/.test(a)) return true; // depth/size like 150m, 300m, 40mm
+  if (a === b || b.startsWith(a)) return true; // brand name or a prefix of it
+  return false;
+}
+
+/**
  * Match a listing to a watchlist model by alias, preferring the MOST SPECIFIC
- * match (longest matching alias) rather than array order — so a title mentioning
- * both "Speedmaster" and "Seamaster" resolves to Speedmaster, not whichever comes
- * first in the config. Homage/tribute/style listings are disqualified even when a
- * brand alias appears. Returns the chosen model plus `needsReview`, which is true
- * when two DIFFERENT models tie on longest matched alias (genuinely ambiguous).
+ * match (longest matching alias) over array order.
+ *
+ * Two guards prevent mismatches (a Hamilton Jazzmaster "300M" was matching the
+ * Omega Diver 300M tier via the generic "300m" alias):
+ *  1. BRAND GUARD — the chosen model's brand must actually appear in the listing,
+ *     so a generic alias can't route another brand's watch to the wrong tier.
+ *  2. CONFIDENCE — if the model matched ONLY via generic aliases (brand/depth,
+ *     no model-distinctive term), it's flagged needsReview rather than scored
+ *     confidently ("right brand, model unlisted").
+ * Also returns needsReview when two different models tie on longest matched alias.
+ * Returns null when no brand-consistent model matches at all.
  */
 export function matchModelDetailed(
   listing: RawListing,
@@ -275,22 +296,28 @@ export function matchModelDetailed(
   const excludeRe = buildTermRegex(cfg.matchExcludeTerms);
   if (excludeRe && excludeRe.test(hay)) return null;
 
-  // For each model, the length of its longest alias that appears in the text.
-  const matches: { model: WatchModel; len: number }[] = [];
+  const matches: { model: WatchModel; len: number; hasSpecific: boolean }[] = [];
   for (const model of watchlist.models) {
+    // Brand guard: don't consider a model whose brand isn't in the listing.
+    if (!hay.includes(model.brand.toLowerCase())) continue;
     let best = 0;
+    let hasSpecific = false;
     for (const a of model.aliases) {
-      if (hay.includes(a.toLowerCase())) best = Math.max(best, a.trim().length);
+      if (hay.includes(a.toLowerCase())) {
+        best = Math.max(best, a.trim().length);
+        if (!isGenericAlias(a, model.brand)) hasSpecific = true;
+      }
     }
-    if (best > 0) matches.push({ model, len: best });
+    if (best > 0) matches.push({ model, len: best, hasSpecific });
   }
   if (matches.length === 0) return null;
 
   matches.sort((x, y) => y.len - x.len);
   const top = matches[0];
-  // Ambiguous only if a DIFFERENT model matched with the same top specificity.
-  const needsReview = matches.some((m) => m.model !== top.model && m.len === top.len);
-  return { model: top.model, needsReview };
+  const tie = matches.some((m) => m.model !== top.model && m.len === top.len);
+  // Brand matched but no model-distinctive alias did -> not a confident model ID.
+  const brandOnly = !top.hasSpecific;
+  return { model: top.model, needsReview: tie || brandOnly };
 }
 
 /** Back-compat: the chosen model only (specificity-ranked). */
