@@ -10,6 +10,7 @@
   "watchIndicativeTerms": ["automatic", "quartz", "chronograph", "case", "dial", "movement", "mm", "ref"],
   "allowedLeafCategoryIds": ["31387"],
   "staleDaysByLiquidity": { "5": 21, "4": 18, "3": 14, "2": 12, "1": 10 },
+  "ancientAfterDays": 90,
   "profit": {
     "resaleFactor": 0.85,
     "ebayFeePct": 0.15,

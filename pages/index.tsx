@@ -1,33 +1,22 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Head from "next/head";
 import type { Deal, Source } from "@/lib/types";
-import ScoreRing from "@/components/ScoreRing";
+import DealCard from "@/components/DealCard";
+import DealModal from "@/components/DealModal";
+import { fmtMoney, fmtWhen } from "@/components/dealUtils";
 
-type SortKey = "score" | "newest";
+type SortKey = "score" | "newest" | "profit";
+type View = "grid" | "list";
+type AgeTab = "all" | "fresh" | "aging" | "stale" | "ancient";
 
-const SOURCE_META: Record<Source, { label: string; className: string }> = {
-  reddit: { label: "Reddit", className: "text-rust border-rust/40" },
-  ebay: { label: "eBay", className: "text-teal border-teal/40" },
-};
-
-function fmtMoney(n: number): string {
-  return "$" + Math.round(n).toLocaleString("en-US");
-}
-
-function fmtWhen(ms: number): string {
-  const diff = Date.now() - ms;
-  const mins = Math.round(diff / 60000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.round(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  return `${Math.round(hrs / 24)}d ago`;
-}
-
-const CHIP_ACTIVE =
-  "font-mono text-[11px] px-3 py-1.5 rounded-full border border-brand bg-brand/15 text-brand-hover cursor-pointer whitespace-nowrap flex-shrink-0 transition-colors";
-const CHIP_INACTIVE =
-  "font-mono text-[11px] px-3 py-1.5 rounded-full border border-border bg-transparent text-muted cursor-pointer whitespace-nowrap flex-shrink-0 transition-colors hover:bg-white/5";
+const AGE_TABS: { key: AgeTab; label: string }[] = [
+  { key: "all", label: "All" },
+  { key: "fresh", label: "Fresh" },
+  { key: "aging", label: "Aging" },
+  { key: "stale", label: "Stale" },
+  { key: "ancient", label: "Ancient" },
+];
+const PAGE = 24;
 
 export default function Dashboard() {
   const [deals, setDeals] = useState<Deal[]>([]);
@@ -35,9 +24,15 @@ export default function Dashboard() {
   const [error, setError] = useState("");
 
   const [sort, setSort] = useState<SortKey>("score");
+  const [view, setView] = useState<View>("grid");
+  const [search, setSearch] = useState("");
+  const [ageTab, setAgeTab] = useState<AgeTab>("all");
   const [source, setSource] = useState<"all" | Source>("all");
   const [minScore, setMinScore] = useState(0);
-  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [budgetOnly, setBudgetOnly] = useState(false);
+  const [showNeedsReview, setShowNeedsReview] = useState(false);
+  const [visible, setVisible] = useState(PAGE);
+
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [modalVisible, setModalVisible] = useState(false);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -62,24 +57,48 @@ export default function Dashboard() {
     };
   }, []);
 
-  const filtered = useMemo(
-    () => deals.filter((d) => (source === "all" || d.source === source) && d.score >= minScore),
-    [deals, source, minScore]
-  );
+  // Everything except the age tab (so tab counts reflect the other filters).
+  const preAge = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return deals.filter(
+      (d) =>
+        (source === "all" || d.source === source) &&
+        d.score >= minScore &&
+        (!budgetOnly || d.withinBudget) &&
+        (showNeedsReview || !d.needsReview) &&
+        (q === "" || `${d.brand} ${d.model} ${d.title}`.toLowerCase().includes(q))
+    );
+  }, [deals, source, minScore, budgetOnly, showNeedsReview, search]);
+
+  const tabCounts = useMemo(() => {
+    const c: Record<AgeTab, number> = { all: preAge.length, fresh: 0, aging: 0, stale: 0, ancient: 0 };
+    for (const d of preAge) c[d.ageTier]++;
+    return c;
+  }, [preAge]);
 
   const sorted = useMemo(() => {
-    const copy = [...filtered];
-    copy.sort((a, b) => (sort === "score" ? b.score - a.score : b.foundAt - a.foundAt));
-    return copy;
-  }, [filtered, sort]);
+    const rows = preAge.filter((d) => ageTab === "all" || d.ageTier === ageTab);
+    rows.sort((a, b) =>
+      sort === "score" ? b.score - a.score : sort === "profit" ? b.estimatedNetProfit - a.estimatedNetProfit : b.foundAt - a.foundAt
+    );
+    return rows;
+  }, [preAge, ageTab, sort]);
 
-  const lastScanned = useMemo(() => {
-    if (deals.length === 0) return null;
-    return fmtWhen(Math.max(...deals.map((d) => d.foundAt)));
-  }, [deals]);
+  // Reset pagination when the result set changes.
+  useEffect(() => setVisible(PAGE), [sorted]);
 
-  const filtersActive = source !== "all" || minScore > 0;
-  const activeFilterCount = (source !== "all" ? 1 : 0) + (minScore > 0 ? 1 : 0);
+  const staleCount = useMemo(() => sorted.filter((d) => d.stale).length, [sorted]);
+  const totalProfit = useMemo(() => sorted.reduce((s, d) => s + d.estimatedNetProfit, 0), [sorted]);
+  const lastScanned = useMemo(
+    () => (deals.length ? fmtWhen(Math.max(...deals.map((d) => d.foundAt))) : null),
+    [deals]
+  );
+  const hiddenNeedsReview = useMemo(
+    () => (showNeedsReview ? 0 : deals.filter((d) => d.needsReview).length),
+    [deals, showNeedsReview]
+  );
+
+  const filtersActive = source !== "all" || minScore > 0 || budgetOnly || ageTab !== "all" || search.trim() !== "";
   const expandedDeal = expandedId != null ? deals.find((d) => `${d.source}:${d.id}` === expandedId) ?? null : null;
 
   function openDeal(d: Deal) {
@@ -95,7 +114,12 @@ export default function Dashboard() {
   function clearFilters() {
     setSource("all");
     setMinScore(0);
+    setBudgetOnly(false);
+    setAgeTab("all");
+    setSearch("");
   }
+
+  const shown = sorted.slice(0, visible);
 
   return (
     <>
@@ -105,79 +129,138 @@ export default function Dashboard() {
       <div className="min-h-screen bg-background text-foreground">
         <div className="sticky top-0 z-10 border-b border-border bg-background/90 backdrop-blur">
           <div className="mx-auto max-w-6xl px-4 pt-4 sm:px-6">
-            <div className="flex flex-wrap items-end justify-between gap-4">
+            {/* Row 1: title + sort + view */}
+            <div className="flex flex-wrap items-end justify-between gap-3">
               <div>
                 <p className="mb-1 font-mono text-[11px] uppercase tracking-[0.14em] text-muted">
                   Reddit · eBay {lastScanned ? `· last scanned ${lastScanned}` : ""}
                 </p>
                 <h1 className="font-serif text-2xl font-medium tracking-tight sm:text-3xl">Flagged deals</h1>
               </div>
-              <div className="flex items-center gap-2 rounded-full border border-border bg-card p-1">
-                <SortButton active={sort === "score"} onClick={() => setSort("score")}>
-                  Score
-                </SortButton>
-                <SortButton active={sort === "newest"} onClick={() => setSort("newest")}>
-                  Newest
-                </SortButton>
+              <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1 rounded-full border border-border bg-card p-1">
+                  {(["score", "profit", "newest"] as SortKey[]).map((k) => (
+                    <Seg key={k} active={sort === k} onClick={() => setSort(k)}>
+                      {k === "score" ? "Score" : k === "profit" ? "Profit" : "Newest"}
+                    </Seg>
+                  ))}
+                </div>
+                <div className="flex items-center gap-1 rounded-full border border-border bg-card p-1">
+                  <Seg active={view === "grid"} onClick={() => setView("grid")} aria="Grid">▦</Seg>
+                  <Seg active={view === "list"} onClick={() => setView("list")} aria="List">☰</Seg>
+                </div>
               </div>
             </div>
 
+            {/* Row 2: search */}
+            <div className="mt-3">
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search brand or model…"
+                className="w-full rounded-xl border border-border bg-card px-4 py-2 font-mono text-[13px] text-foreground outline-none placeholder:text-muted focus:border-brand sm:max-w-sm"
+              />
+            </div>
+
+            {/* Row 3: age tabs */}
+            <div className="mt-3 flex items-center gap-1 overflow-x-auto">
+              {AGE_TABS.map((t) => (
+                <button
+                  key={t.key}
+                  onClick={() => setAgeTab(t.key)}
+                  className={`flex-shrink-0 whitespace-nowrap border-b-2 px-3 pb-2 pt-1 font-mono text-[12px] transition-colors ${
+                    ageTab === t.key ? "border-brand text-brand-hover" : "border-transparent text-muted hover:text-foreground"
+                  }`}
+                >
+                  {t.label} <span className="text-[10px] opacity-70">{tabCounts[t.key]}</span>
+                </button>
+              ))}
+            </div>
+
+            {/* Row 4: filter bar */}
             <div className="flex items-center gap-2 overflow-x-auto py-3">
-              <button
-                onClick={() => setFiltersOpen((v) => !v)}
-                className={`flex flex-shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border px-3 py-1.5 font-mono text-[11px] transition-colors ${
-                  filtersActive ? "border-brand bg-brand/10 text-brand-hover" : "border-border text-muted hover:bg-white/5"
-                }`}
-              >
-                <span aria-hidden>⚙</span> Filters{activeFilterCount > 0 ? ` (${activeFilterCount})` : ""}
-              </button>
-              <div
-                className="flex items-center gap-2 overflow-hidden transition-[max-width,opacity] duration-300"
-                style={{ maxWidth: filtersOpen ? 1000 : 0, opacity: filtersOpen ? 1 : 0 }}
-              >
-                <span className="h-[18px] w-px flex-shrink-0 bg-border" />
-                {(["all", "reddit", "ebay"] as const).map((s) => (
-                  <button key={s} onClick={() => setSource(s)} className={source === s ? CHIP_ACTIVE : CHIP_INACTIVE}>
-                    {s === "all" ? "All sources" : SOURCE_META[s].label}
-                  </button>
-                ))}
-                <span className="h-[18px] w-px flex-shrink-0 bg-border" />
-                {[0, 50, 70, 90].map((s) => (
-                  <button key={s} onClick={() => setMinScore(s)} className={minScore === s ? CHIP_ACTIVE : CHIP_INACTIVE}>
-                    {s === 0 ? "Any score" : `${s}+`}
-                  </button>
-                ))}
-              </div>
+              {(["all", "reddit", "ebay"] as const).map((s) => (
+                <Chip key={s} active={source === s} onClick={() => setSource(s)}>
+                  {s === "all" ? "All sources" : s === "reddit" ? "Reddit" : "eBay"}
+                </Chip>
+              ))}
+              <span className="h-[18px] w-px flex-shrink-0 bg-border" />
+              {[0, 50, 70, 90].map((s) => (
+                <Chip key={s} active={minScore === s} onClick={() => setMinScore(s)}>
+                  {s === 0 ? "Any score" : `${s}+`}
+                </Chip>
+              ))}
+              <span className="h-[18px] w-px flex-shrink-0 bg-border" />
+              <Chip active={budgetOnly} onClick={() => setBudgetOnly((v) => !v)}>Within budget</Chip>
+              <Chip active={showNeedsReview} onClick={() => setShowNeedsReview((v) => !v)}>
+                {showNeedsReview ? "Showing needs-review" : "Hiding needs-review"}
+              </Chip>
             </div>
           </div>
         </div>
 
-        <main className="mx-auto max-w-6xl px-4 py-6 sm:px-6">
+        {/* Summary strip */}
+        {!loading && !error && (
+          <div className="mx-auto max-w-6xl px-4 pt-4 sm:px-6">
+            <div className="flex flex-wrap items-center gap-x-6 gap-y-1 rounded-2xl border border-border bg-card px-4 py-3 font-mono text-[12px]">
+              <span className="text-foreground">
+                <b className="font-semibold text-brand">{sorted.length}</b> deal{sorted.length === 1 ? "" : "s"} in view
+              </span>
+              <span className="text-muted">
+                <b className={staleCount ? "text-[#d9a441]" : "text-muted"}>{staleCount}</b> stale — worth a lowball
+              </span>
+              <span className="text-muted">
+                est. profit in view <b className="text-[#7bbf8e]">{fmtMoney(totalProfit)}</b>
+              </span>
+            </div>
+          </div>
+        )}
+
+        <main className="mx-auto max-w-6xl px-4 py-5 sm:px-6">
           {loading ? (
             <SkeletonGrid />
           ) : error ? (
             <EmptyCard title="Couldn't load deals" note={error} />
-          ) : sorted.length === 0 ? (
+          ) : shown.length === 0 ? (
             <EmptyCard
               title={filtersActive ? "No deals matching your filters" : "No deals flagged yet"}
               note={
-                filtersActive
-                  ? "Try loosening the source or score filter."
-                  : "The scanner hasn't flagged anything under threshold — check back after the next scan runs."
+                hiddenNeedsReview > 0
+                  ? `${hiddenNeedsReview} lower-confidence deal${hiddenNeedsReview === 1 ? "" : "s"} hidden — toggle "needs-review" to show.`
+                  : filtersActive
+                    ? "Try loosening the filters."
+                    : "The scanner hasn't flagged anything under threshold — check back after the next scan."
               }
               onClear={filtersActive ? clearFilters : undefined}
             />
+          ) : view === "grid" ? (
+            <div className="grid grid-cols-1 gap-3.5 [grid-template-columns:repeat(auto-fill,minmax(280px,1fr))]">
+              {shown.map((d) => (
+                <DealCard key={`${d.source}:${d.id}`} deal={d} view="grid" onOpen={() => openDeal(d)} />
+              ))}
+            </div>
           ) : (
-            <div className="grid grid-cols-1 gap-3.5 [grid-template-columns:repeat(auto-fill,minmax(320px,1fr))]">
-              {sorted.map((d) => (
-                <DealCard key={`${d.source}:${d.id}`} deal={d} onOpen={() => openDeal(d)} />
+            <div className="flex flex-col gap-2.5">
+              {shown.map((d) => (
+                <DealCard key={`${d.source}:${d.id}`} deal={d} view="list" onOpen={() => openDeal(d)} />
               ))}
             </div>
           )}
 
-          {!loading && !error && sorted.length > 0 && (
+          {!loading && !error && shown.length < sorted.length && (
+            <div className="mt-6 flex justify-center">
+              <button
+                onClick={() => setVisible((v) => v + PAGE)}
+                className="rounded-full border border-brand/40 px-6 py-2.5 font-mono text-xs text-brand transition-colors hover:bg-brand/10"
+              >
+                Load more ({sorted.length - shown.length} more)
+              </button>
+            </div>
+          )}
+
+          {!loading && !error && shown.length > 0 && (
             <p className="mt-7 font-mono text-[11px] text-muted">
-              {sorted.length} deal{sorted.length === 1 ? "" : "s"} · surfaced for review only — no auto-buying
+              Showing {shown.length} of {sorted.length} · surfaced for review only — no auto-buying
             </p>
           )}
         </main>
@@ -188,11 +271,12 @@ export default function Dashboard() {
   );
 }
 
-function SortButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+function Seg({ active, onClick, children, aria }: { active: boolean; onClick: () => void; children: React.ReactNode; aria?: string }) {
   return (
     <button
       onClick={onClick}
-      className={`rounded-full px-3.5 py-1.5 font-mono text-xs font-medium transition-colors ${
+      aria-label={aria}
+      className={`rounded-full px-3 py-1.5 font-mono text-xs font-medium transition-colors ${
         active ? "bg-brand text-[#1a1408]" : "text-muted hover:bg-white/5"
       }`}
     >
@@ -201,115 +285,26 @@ function SortButton({ active, onClick, children }: { active: boolean; onClick: (
   );
 }
 
-function DealCard({ deal: d, onOpen }: { deal: Deal; onOpen: () => void }) {
-  const meta = SOURCE_META[d.source] ?? { label: d.source, className: "text-muted border-border" };
+function Chip({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
   return (
-    <div
-      onClick={onOpen}
-      className="flex cursor-pointer flex-col gap-0.5 rounded-[18px] border border-border bg-card p-[18px] pb-5 transition-[border-color,transform] duration-150 hover:-translate-y-0.5 hover:border-[#3a3628]"
+    <button
+      onClick={onClick}
+      className={`flex-shrink-0 whitespace-nowrap rounded-full border px-3 py-1.5 font-mono text-[11px] transition-colors ${
+        active ? "border-brand bg-brand/15 text-brand-hover" : "border-border bg-transparent text-muted hover:bg-white/5"
+      }`}
     >
-      <div className="flex items-center justify-between gap-2.5">
-        <span className={`inline-flex items-center rounded-full border px-2.5 py-0.5 font-mono text-[10px] uppercase tracking-wide ${meta.className}`}>
-          {meta.label}
-        </span>
-        <span className="whitespace-nowrap font-mono text-[11px] text-muted">{fmtWhen(d.foundAt)}</span>
-      </div>
-
-      <p className="mt-2.5 line-clamp-2 font-serif text-[17px] font-medium leading-tight text-foreground">{d.title}</p>
-      <p className="font-mono text-[11px] tracking-wide text-muted">
-        {d.brand} · {d.model}
-      </p>
-
-      <div className="mt-1.5 flex items-center gap-4">
-        <ScoreRing score={d.score} />
-        <div className="min-w-0 flex-1">
-          <div className="flex items-baseline gap-1.5">
-            <span className="font-serif text-2xl font-semibold text-brand">{Math.round(d.discount * 100)}%</span>
-            <span className="font-mono text-[11px] text-muted">off median</span>
-          </div>
-          <div className="mt-1 flex items-baseline gap-2">
-            <span className="font-mono text-[15px] font-medium text-foreground">{fmtMoney(d.price)}</span>
-            <span className="font-mono text-xs text-muted line-through">{fmtMoney(d.median)}</span>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function DealModal({ deal: d, visible, onClose }: { deal: Deal; visible: boolean; onClose: () => void }) {
-  const meta = SOURCE_META[d.source] ?? { label: d.source, className: "text-muted border-border" };
-  const savings = d.median - d.price;
-  return (
-    <div
-      onClick={onClose}
-      className="fixed inset-0 z-50 flex items-end justify-center backdrop-blur-sm transition-colors duration-200"
-      style={{ background: visible ? "#05050488" : "#05050400" }}
-    >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-[460px] rounded-t-[20px] border border-border bg-card p-5 pb-6 shadow-2xl transition-transform duration-300 ease-out"
-        style={{ maxHeight: "88vh", overflowY: "auto", transform: `translateY(${visible ? "0" : "100%"})` }}
-      >
-        <div className="flex items-center justify-between">
-          <span className={`inline-flex items-center rounded-full border px-2.5 py-0.5 font-mono text-[10px] uppercase tracking-wide ${meta.className}`}>
-            {meta.label}
-          </span>
-          <button onClick={onClose} className="p-1 text-xl leading-none text-muted hover:text-foreground">
-            ×
-          </button>
-        </div>
-
-        <h2 className="mt-3.5 font-serif text-xl leading-snug text-foreground">{d.title}</h2>
-        <p className="mb-4 font-mono text-xs text-muted">
-          {d.brand} · {d.model} · found {fmtWhen(d.foundAt)}
-        </p>
-
-        <div className="flex items-center gap-4 rounded-2xl border border-border bg-background p-4">
-          <ScoreRing score={d.score} size={88} strokeWidth={6} fontSize={24} />
-          <div>
-            <p className="font-serif text-3xl font-semibold text-brand">{Math.round(d.discount * 100)}% off</p>
-            <p className="mt-0.5 font-mono text-xs text-muted">vs. resale median</p>
-          </div>
-        </div>
-
-        <div className="mt-3.5 flex flex-col gap-1.5 font-mono text-[13px] text-[#c7c3b6]">
-          <div className="flex justify-between">
-            <span className="text-muted">Listing price</span>
-            <span>{fmtMoney(d.price)}</span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-muted">Resale median</span>
-            <span className="text-muted line-through">{fmtMoney(d.median)}</span>
-          </div>
-          <div className="mt-0.5 flex justify-between border-t border-border pt-1.5">
-            <span className="text-muted">Below median</span>
-            <span className="text-brand">
-              {fmtMoney(savings)} ({Math.round(d.discount * 100)}%)
-            </span>
-          </div>
-        </div>
-
-        <a
-          href={d.url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-brand px-4 py-3.5 text-[15px] font-semibold text-[#1a1408] transition-colors hover:bg-brand-hover"
-        >
-          View listing ↗
-        </a>
-      </div>
-    </div>
+      {children}
+    </button>
   );
 }
 
 function SkeletonGrid() {
   return (
-    <div className="grid grid-cols-1 gap-3.5 [grid-template-columns:repeat(auto-fill,minmax(320px,1fr))]">
-      {Array.from({ length: 6 }).map((_, i) => (
+    <div className="grid grid-cols-1 gap-3.5 [grid-template-columns:repeat(auto-fill,minmax(280px,1fr))]">
+      {Array.from({ length: 8 }).map((_, i) => (
         <div
           key={i}
-          className="h-[158px] rounded-[18px] border border-border bg-card"
+          className="h-[300px] rounded-[18px] border border-border bg-card"
           style={{ animation: "pulse-soft 1.6s ease-in-out infinite", animationDelay: `${i * 70}ms` }}
         />
       ))}
@@ -320,6 +315,7 @@ function SkeletonGrid() {
 function EmptyCard({ title, note, onClear }: { title: string; note: string; onClear?: () => void }) {
   return (
     <div className="flex flex-col items-center gap-2.5 rounded-2xl border border-border bg-card px-6 py-16 text-center">
+      <div className="mb-1 flex h-14 w-14 items-center justify-center rounded-full bg-brand/10 text-2xl">⌚</div>
       <h2 className="font-serif text-lg text-foreground">{title}</h2>
       <p className="max-w-md text-sm text-muted">{note}</p>
       {onClear && (

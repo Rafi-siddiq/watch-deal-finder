@@ -16,6 +16,7 @@ type WatchlistFilters = Watchlist & {
   watchIndicativeTerms?: string[];
   allowedLeafCategoryIds?: string[];
   staleDaysByLiquidity?: Record<string, number>;
+  ancientAfterDays?: number;
   profit?: {
     resaleFactor?: number;
     ebayFeePct?: number;
@@ -434,8 +435,15 @@ export function evaluate(
   const daysListed = Math.max(0, Math.floor((now - createdAt) / DAY_MS));
   const staleAfterDays = staleAfterDaysFor(model, cfg);
   const stale = daysListed >= staleAfterDays;
+  const ancientAfterDays = cfg.ancientAfterDays ?? 90;
   const ageTier: Deal["ageTier"] =
-    stale ? "stale" : daysListed >= staleAfterDays * 0.6 ? "aging" : "fresh";
+    daysListed >= ancientAfterDays
+      ? "ancient"
+      : stale
+        ? "stale"
+        : daysListed >= staleAfterDays * 0.6
+          ? "aging"
+          : "fresh";
 
   return {
     source: listing.source,
