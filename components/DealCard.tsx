@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { Deal } from "@/lib/types";
 import ScoreRing from "@/components/ScoreRing";
-import { fmtMoney, fmtWhen, SOURCE_META, AGE_META } from "@/components/dealUtils";
+import { fmtMoney, fmtWhen, SOURCE_META, AGE_META, isSuspicious } from "@/components/dealUtils";
 
 /** Listing photo with a graceful watch-glyph fallback (Reddit / missing / broken). */
 export function ListingImage({ url, className = "" }: { url?: string; className?: string }) {
@@ -25,16 +25,23 @@ function Tag({ children, className = "" }: { children: React.ReactNode; classNam
   );
 }
 
+/** Trust / urgency badges, ordered most-urgent first. */
 function Badges({ d }: { d: Deal }) {
   const age = AGE_META[d.ageTier];
   return (
     <>
+      {isSuspicious(d) && (
+        <Tag className="border-[#e0685f]/60 bg-[#e0685f]/10 text-[#e0685f] uppercase tracking-wide">
+          ⚠ Verify · {Math.round(d.discount * 100)}% off
+        </Tag>
+      )}
       {(d.ageTier === "stale" || d.ageTier === "ancient") && (
         <Tag className={`${age.className} uppercase tracking-wide`}>
           {age.label} · posted {d.daysListed}d ago
         </Tag>
       )}
       {d.needsReview && <Tag className="border-[#c4665f]/50 text-[#c4665f] uppercase tracking-wide">Needs review</Tag>}
+      {d.underDescribed && <Tag className="border-border text-muted uppercase tracking-wide">Sparse listing</Tag>}
       {!d.withinBudget && <Tag className="border-border text-muted uppercase tracking-wide">Over budget</Tag>}
     </>
   );
@@ -51,19 +58,30 @@ function DetailTags({ d }: { d: Deal }) {
   );
 }
 
+/** Headline-discount treatment keyed to confidence:
+ *  suspicious -> rose "verify", needsReview -> muted "unverified median", else brass "off median". */
+function discountLook(d: Deal): { color: string; note: string } {
+  if (isSuspicious(d)) return { color: "text-[#e0685f]", note: "verify" };
+  if (d.needsReview) return { color: "text-muted", note: "unverified median" };
+  return { color: "text-brand", note: "off median" };
+}
+
 export default function DealCard({ deal: d, onOpen, view }: { deal: Deal; onOpen: () => void; view: "grid" | "list" }) {
   const meta = SOURCE_META[d.source] ?? { label: d.source, className: "text-muted border-border" };
   const profitPositive = d.estimatedNetProfit >= 0;
+  const look = discountLook(d);
+  // Lower-confidence rows read as provisional: dashed, slightly dimmer frame.
+  const frame = d.needsReview ? "border-dashed border-[#332f24]" : "border-border";
 
   if (view === "list") {
     return (
       <div
         onClick={onOpen}
-        className="flex cursor-pointer items-center gap-4 rounded-2xl border border-border bg-card p-3 transition-colors hover:border-[#3a3628] hover:bg-card-hover"
+        className={`flex cursor-pointer items-center gap-4 rounded-2xl border ${frame} bg-card p-3 transition-colors hover:border-[#3a3628] hover:bg-card-hover`}
       >
         <ListingImage url={d.imageUrl} className="h-16 w-16 flex-shrink-0 rounded-xl" />
         <div className="min-w-0 flex-1">
-          <div className="mb-0.5 flex items-center gap-2">
+          <div className="mb-0.5 flex flex-wrap items-center gap-1.5">
             <Tag className={`${meta.className} uppercase tracking-wide`}>{meta.label}</Tag>
             <Badges d={d} />
           </div>
@@ -72,8 +90,8 @@ export default function DealCard({ deal: d, onOpen, view }: { deal: Deal; onOpen
         </div>
         <div className="flex flex-shrink-0 items-center gap-4 text-right">
           <div>
-            <div className="font-serif text-lg font-semibold text-brand">{Math.round(d.discount * 100)}%</div>
-            <div className="font-mono text-[10px] text-muted">off median</div>
+            <div className={`font-serif text-lg font-semibold ${look.color}`}>{Math.round(d.discount * 100)}%</div>
+            <div className="font-mono text-[10px] text-muted">{look.note}</div>
           </div>
           <div>
             <div className={`font-mono text-sm font-medium ${profitPositive ? "text-[#7bbf8e]" : "text-muted"}`}>
@@ -90,7 +108,7 @@ export default function DealCard({ deal: d, onOpen, view }: { deal: Deal; onOpen
   return (
     <div
       onClick={onOpen}
-      className="flex cursor-pointer flex-col overflow-hidden rounded-[18px] border border-border bg-card transition-[border-color,transform] duration-150 hover:-translate-y-0.5 hover:border-[#3a3628]"
+      className={`flex cursor-pointer flex-col overflow-hidden rounded-[18px] border ${frame} bg-card transition-[border-color,transform] duration-150 hover:-translate-y-0.5 hover:border-[#3a3628]`}
     >
       <div className="relative">
         <ListingImage url={d.imageUrl} className="h-44 w-full" />
@@ -114,8 +132,8 @@ export default function DealCard({ deal: d, onOpen, view }: { deal: Deal; onOpen
         <div className="mt-auto flex items-end justify-between gap-3 pt-1">
           <div>
             <div className="flex items-baseline gap-1.5">
-              <span className="font-serif text-2xl font-semibold text-brand">{Math.round(d.discount * 100)}%</span>
-              <span className="font-mono text-[10px] text-muted">off</span>
+              <span className={`font-serif text-2xl font-semibold ${look.color}`}>{Math.round(d.discount * 100)}%</span>
+              <span className="font-mono text-[10px] text-muted">{look.note}</span>
             </div>
             <div className="mt-0.5 flex items-baseline gap-2">
               <span className="font-mono text-[14px] font-medium text-foreground">{fmtMoney(d.price)}</span>

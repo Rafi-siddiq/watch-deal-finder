@@ -3,7 +3,7 @@ import Head from "next/head";
 import type { Deal, Source } from "@/lib/types";
 import DealCard from "@/components/DealCard";
 import DealModal from "@/components/DealModal";
-import { fmtMoney, fmtWhen } from "@/components/dealUtils";
+import { fmtMoney, fmtWhen, isSuspicious } from "@/components/dealUtils";
 
 type SortKey = "score" | "newest" | "profit";
 type View = "grid" | "list";
@@ -88,6 +88,9 @@ export default function Dashboard() {
   useEffect(() => setVisible(PAGE), [sorted]);
 
   const staleCount = useMemo(() => sorted.filter((d) => d.stale).length, [sorted]);
+  const confidentCount = useMemo(() => sorted.filter((d) => !d.needsReview).length, [sorted]);
+  const suspiciousCount = useMemo(() => sorted.filter(isSuspicious).length, [sorted]);
+  const reviewInView = sorted.length - confidentCount;
   const totalProfit = useMemo(() => sorted.reduce((s, d) => s + d.estimatedNetProfit, 0), [sorted]);
   const lastScanned = useMemo(
     () => (deals.length ? fmtWhen(Math.max(...deals.map((d) => d.foundAt))) : null),
@@ -199,17 +202,55 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Summary strip */}
+        {/* Summary strip — confidence-first hierarchy */}
         {!loading && !error && (
           <div className="mx-auto max-w-6xl px-4 pt-4 sm:px-6">
-            <div className="flex flex-wrap items-center gap-x-6 gap-y-1 rounded-2xl border border-border bg-card px-4 py-3 font-mono text-[12px]">
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 rounded-2xl border border-border bg-card px-4 py-3 font-mono text-[12px] text-muted">
               <span className="text-foreground">
-                <b className="font-semibold text-brand">{sorted.length}</b> deal{sorted.length === 1 ? "" : "s"} in view
+                <b className="font-semibold text-brand">{sorted.length}</b> in view
               </span>
-              <span className="text-muted">
-                <b className={staleCount ? "text-[#d9a441]" : "text-muted"}>{staleCount}</b> stale — worth a lowball
-              </span>
-              <span className="text-muted">
+              <Dot />
+              <span><b className="text-foreground">{confidentCount}</b> confident</span>
+
+              {showNeedsReview
+                ? reviewInView > 0 && (
+                    <>
+                      <Dot />
+                      <button
+                        onClick={() => setShowNeedsReview(false)}
+                        className="text-[#c4665f] transition-colors hover:text-[#d98079]"
+                      >
+                        <b>{reviewInView}</b> needs-review shown · hide
+                      </button>
+                    </>
+                  )
+                : hiddenNeedsReview > 0 && (
+                    <>
+                      <Dot />
+                      <button
+                        onClick={() => setShowNeedsReview(true)}
+                        className="text-[#d9a441] transition-colors hover:text-[#e6b85c]"
+                      >
+                        <b>{hiddenNeedsReview}</b> hidden — show
+                      </button>
+                    </>
+                  )}
+
+              {suspiciousCount > 0 && (
+                <>
+                  <Dot />
+                  <span className="text-[#e0685f]"><b>{suspiciousCount}</b> to verify</span>
+                </>
+              )}
+
+              {staleCount > 0 && (
+                <>
+                  <Dot />
+                  <span><b className="text-[#d9a441]">{staleCount}</b> stale</span>
+                </>
+              )}
+
+              <span className="ml-auto">
                 est. profit in view <b className="text-[#7bbf8e]">{fmtMoney(totalProfit)}</b>
               </span>
             </div>
@@ -296,6 +337,10 @@ function Chip({ active, onClick, children }: { active: boolean; onClick: () => v
       {children}
     </button>
   );
+}
+
+function Dot() {
+  return <span className="text-[#3a3628]" aria-hidden>·</span>;
 }
 
 function SkeletonGrid() {

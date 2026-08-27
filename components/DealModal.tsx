@@ -10,6 +10,7 @@ import {
   suggestedOffer,
   draftOfferMessage,
   upscaleEbayImage,
+  isSuspicious,
 } from "@/components/dealUtils";
 
 function Row({ label, value, valueClass = "" }: { label: string; value: React.ReactNode; valueClass?: string }) {
@@ -25,6 +26,21 @@ export default function DealModal({ deal: d, visible, onClose }: { deal: Deal; v
   const meta = SOURCE_META[d.source] ?? { label: d.source, className: "text-muted border-border" };
   const age = AGE_META[d.ageTier];
   const savings = d.median - d.price;
+  const suspicious = isSuspicious(d);
+
+  // Consolidated trust caveats, surfaced right before the offer is drafted.
+  const caveats: string[] = [];
+  if (suspicious)
+    caveats.push(
+      "This discount is implausibly deep. A price this far below the median usually means a parts/incomplete listing, the wrong model, or a typo — confirm it's the actual watch before offering."
+    );
+  if (d.needsReview)
+    caveats.push(
+      "Median unverified: the brand matched but the specific model tier is uncertain, so the discount and profit are approximate."
+    );
+  if (d.underDescribed)
+    caveats.push("Sparse listing: thin title with few details — confirm condition, box/papers, and authenticity.");
+  const caveatColor = suspicious ? "#e0685f" : "#d9a441";
 
   const gallery = useMemo(() => {
     const urls = [d.imageUrl, ...(d.additionalImageUrls ?? [])].filter(Boolean) as string[];
@@ -61,6 +77,11 @@ export default function DealModal({ deal: d, visible, onClose }: { deal: Deal; v
             <span className={`inline-flex items-center rounded-full border px-2.5 py-0.5 font-mono text-[10px] uppercase tracking-wide ${meta.className}`}>
               {meta.label}
             </span>
+            {suspicious && (
+              <span className="inline-flex items-center rounded-full border border-[#e0685f]/60 bg-[#e0685f]/10 px-2.5 py-0.5 font-mono text-[10px] uppercase tracking-wide text-[#e0685f]">
+                ⚠ Verify
+              </span>
+            )}
             {(d.ageTier === "stale" || d.ageTier === "ancient") && (
               <span className={`inline-flex items-center rounded-full border px-2.5 py-0.5 font-mono text-[10px] uppercase tracking-wide ${age.className}`}>
                 {age.label} · {d.daysListed}d
@@ -102,8 +123,10 @@ export default function DealModal({ deal: d, visible, onClose }: { deal: Deal; v
         <div className="flex items-center gap-4 rounded-2xl border border-border bg-background p-4">
           <ScoreRing score={d.score} size={80} strokeWidth={6} fontSize={22} />
           <div>
-            <p className="font-serif text-3xl font-semibold text-brand">{Math.round(d.discount * 100)}% off</p>
-            <p className="mt-0.5 font-mono text-xs text-muted">vs. resale median</p>
+            <p className={`font-serif text-3xl font-semibold ${suspicious ? "text-[#e0685f]" : d.needsReview ? "text-muted" : "text-brand"}`}>
+              {Math.round(d.discount * 100)}% off
+            </p>
+            <p className="mt-0.5 font-mono text-xs text-muted">{d.needsReview ? "vs. unverified median" : "vs. resale median"}</p>
           </div>
           <div className="ml-auto text-right">
             <p className={`font-mono text-xl font-semibold ${d.estimatedNetProfit >= 0 ? "text-[#7bbf8e]" : "text-muted"}`}>
@@ -113,6 +136,25 @@ export default function DealModal({ deal: d, visible, onClose }: { deal: Deal; v
           </div>
         </div>
 
+        {caveats.length > 0 && (
+          <div
+            className="mt-3 rounded-2xl border p-3.5"
+            style={{ borderColor: `${caveatColor}66`, background: `${caveatColor}12` }}
+          >
+            <p className="mb-1.5 font-mono text-[10px] uppercase tracking-[0.14em]" style={{ color: caveatColor }}>
+              Before you offer
+            </p>
+            <ul className="flex flex-col gap-1.5">
+              {caveats.map((c, i) => (
+                <li key={i} className="flex gap-2 font-mono text-[11px] leading-relaxed text-[#c7c3b6]">
+                  <span style={{ color: caveatColor }}>•</span>
+                  <span>{c}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
         <div className="mt-3.5 flex flex-col gap-1.5 font-mono text-[13px] text-[#c7c3b6]">
           <Row label="Listing price" value={fmtMoney(d.price)} />
           <Row label="Resale median" value={fmtMoney(d.median)} valueClass="text-muted line-through" />
@@ -121,6 +163,9 @@ export default function DealModal({ deal: d, visible, onClose }: { deal: Deal; v
           {d.fullSet !== undefined && <Row label="Box & papers" value={d.fullSet ? "Full set" : "Watch only"} />}
           {d.refNumber && <Row label="Reference" value={d.refNumber} />}
           <Row label="Listing age" value={`${d.daysListed} day${d.daysListed === 1 ? "" : "s"} (${age.label})`} />
+          {d.scoreModifier !== 1 && (
+            <Row label="Score adjustment" value={`×${d.scoreModifier.toFixed(2)}`} valueClass="text-brand-hover" />
+          )}
         </div>
 
         {/* Suggested lowball offer */}

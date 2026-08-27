@@ -20,6 +20,15 @@ export const SOURCE_META: Record<string, { label: string; className: string }> =
   ebay: { label: "eBay", className: "text-teal border-teal/40" },
 };
 
+/** Client-side trust heuristic: an implausibly deep discount (>= 90% off median)
+ *  is almost always a parts/typo/wrong-model listing, not a real steal — e.g. a
+ *  $50 "Speedmaster" against a $3,000 median. Flag it for verification rather
+ *  than surfacing it as the best deal. */
+export const SUSPICIOUS_DISCOUNT = 0.9;
+export function isSuspicious(deal: Deal): boolean {
+  return deal.discount >= SUSPICIOUS_DISCOUNT;
+}
+
 export type AgeTier = Deal["ageTier"];
 
 export const AGE_META: Record<AgeTier, { label: string; className: string }> = {
