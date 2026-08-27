@@ -11,8 +11,14 @@ const MARKETPLACE = "EBAY_US";
 const BASE_SCOPE = "https://api.ebay.com/oauth/api_scope";
 const INSIGHTS_SCOPE = "https://api.ebay.com/oauth/api_scope/buy.marketplace.insights";
 
-/** Brand keywords to search. Kept broad; the watchlist scorer does the real filtering. */
-const SEARCH_TERMS = ["Omega", "Hamilton", "Frederique Constant", "MAEN", "Seiko", "Tudor"];
+/** Brand keywords to search. Kept broad; the watchlist scorer does the real filtering.
+ *  Must include every brand present in config/watchlist.json — the scanner only
+ *  fetches listings for terms in THIS list, not for whatever the watchlist scores. */
+const SEARCH_TERMS = [
+  "Omega", "Hamilton", "Frederique Constant", "MAEN", "Seiko", "Tudor",
+  "Rolex", "Cartier", "IWC", "Longines", "Breitling", "Grand Seiko",
+  "Zenith", "Panerai", "Oris", "TAG Heuer", "Rado",
+];
 
 let cachedToken: { token: string; expiresAt: number } | null = null;
 

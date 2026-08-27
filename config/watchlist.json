@@ -70,9 +70,9 @@
     },
     {
       "brand": "Tudor", "model": "Black Bay (other)",
-      "aliases": ["black bay", "pelagos", "tudor bb", "black bay gmt", "black bay pro", "black bay chrono", "black bay 41", "black bay 36", "black bay 54", "black bay ceramic"],
+      "aliases": ["black bay", "tudor bb", "black bay chrono", "black bay 41", "black bay 36", "black bay 54", "black bay ceramic"],
       "resale": { "low": 2400, "median": 3200, "high": 4200 }, "liquidity": 5,
-      "needsReview": true, "note": "BROAD — Pelagos / BB41 / BB GMT / BB Pro etc.; wide band, low confidence"
+      "needsReview": true, "note": "BROAD — BB41 / BB36 / BB54 / Chrono / Ceramic; wide band, low confidence. Pelagos/BB GMT/BB Pro now have dedicated tiers."
     },
     {
       "brand": "Hamilton", "model": "Khaki Field Core",
@@ -126,6 +126,162 @@
       "aliases": ["maen hudson", "maen skindiver", "maen watches", "maen "],
       "resale": { "low": 260, "median": 380, "high": 520 }, "liquidity": 2,
       "needsReview": true, "note": "UNVERIFIED — eBay sample too thin; number not trustworthy"
+    },
+    {
+      "brand": "Rolex", "model": "Submariner",
+      "aliases": ["submariner", "sub date", "sub no-date", "126610", "116610", "124060", "114060", "16610"],
+      "resale": { "low": 8600, "median": 9300, "high": 11200 }, "liquidity": 5,
+      "note": "eBay active n=198, 1.3x spread — steel-modern-weighted; date refs (126610LN) sit higher than this median"
+    },
+    {
+      "brand": "Rolex", "model": "Datejust",
+      "aliases": ["datejust", "date-just", "126234", "126334", "126300", "126200", "116234", "16233"],
+      "resale": { "low": 4000, "median": 4450, "high": 5900 }, "liquidity": 5,
+      "note": "eBay active n=197, 1.4x spread"
+    },
+    {
+      "brand": "Rolex", "model": "Oyster Perpetual",
+      "aliases": ["oyster perpetual 41", "oyster perpetual 39", "oyster perpetual 36", "oyster perpetual 34", "op41", "op36", "124300", "126000", "114300"],
+      "resale": { "low": 3100, "median": 3950, "high": 6900 }, "liquidity": 4,
+      "needsReview": true, "note": "2.2x spread across 28/31/34/36/41mm. Aliases deliberately SIZE-QUALIFIED — a bare 'oyster perpetual' appears on Sub/GMT/DJ dials and would steal those tiers"
+    },
+    {
+      "brand": "Rolex", "model": "GMT-Master II",
+      "aliases": ["gmt-master ii", "gmt master ii", "gmt-master 2", "gmtmaster", "126710", "116710", "126711", "116719"],
+      "resale": { "low": 11400, "median": 13200, "high": 17300 }, "liquidity": 5,
+      "note": "eBay active n=180, 1.5x spread"
+    },
+    {
+      "brand": "Tudor", "model": "Black Bay GMT",
+      "aliases": ["black bay gmt", "bb gmt", "black bay gmt s&g", "79830", "m79830"],
+      "resale": { "low": 3200, "median": 3750, "high": 4400 }, "liquidity": 4,
+      "note": "eBay active n=156, 1.3x spread"
+    },
+    {
+      "brand": "Tudor", "model": "Black Bay Pro",
+      "aliases": ["black bay pro", "bb pro", "79470", "m79470"],
+      "resale": { "low": 3100, "median": 3650, "high": 4200 }, "liquidity": 4,
+      "note": "eBay active n=125, 1.3x spread"
+    },
+    {
+      "brand": "Tudor", "model": "Pelagos",
+      "aliases": ["pelagos", "pelagos 39", "pelagos fxd", "pelagos lhd", "25600", "25407", "25707"],
+      "resale": { "low": 3500, "median": 3950, "high": 4800 }, "liquidity": 4,
+      "note": "eBay active n=193, 1.3x spread"
+    },
+    {
+      "brand": "Tudor", "model": "Ranger",
+      "aliases": ["tudor ranger", "ranger 39", "79950", "m79950"],
+      "resale": { "low": 2350, "median": 2850, "high": 3750 }, "liquidity": 3,
+      "note": "eBay active n=163, 1.6x spread"
+    },
+    {
+      "brand": "Cartier", "model": "Tank",
+      "aliases": ["cartier tank", "tank must", "tank solo", "tank louis", "tank francaise", "tank française", "tank americaine", "tank américaine", "wsta", "w51"],
+      "resale": { "low": 1900, "median": 2600, "high": 3400 }, "liquidity": 4,
+      "note": "eBay active n=198, 1.8x spread (quartz Must → Louis auto)"
+    },
+    {
+      "brand": "Cartier", "model": "Santos",
+      "aliases": ["santos", "santos de cartier", "santos 100", "santos galbee", "santos-dumont", "wssa", "wgsa"],
+      "resale": { "low": 3700, "median": 5100, "high": 7200 }, "liquidity": 4,
+      "note": "eBay active n=197, 1.9x spread"
+    },
+    {
+      "brand": "IWC", "model": "Pilot's Watch",
+      "aliases": ["iwc pilot", "pilot's watch", "pilots watch", "mark xviii", "mark xx", "big pilot", "iw328", "iw327", "iw388", "iw501"],
+      "resale": { "low": 3100, "median": 4200, "high": 5750 }, "liquidity": 4,
+      "note": "eBay active n=191, 1.8x spread (Mark XVIII → Big Pilot)"
+    },
+    {
+      "brand": "IWC", "model": "Portugieser",
+      "aliases": ["portugieser", "portuguese", "iw500", "iw371", "iw358"],
+      "resale": { "low": 4100, "median": 5700, "high": 8300 }, "liquidity": 3,
+      "note": "eBay active n=133 (67 off-model dropped), 2.0x spread; Chrono vs Auto vs Perpetual"
+    },
+    {
+      "brand": "Longines", "model": "Spirit",
+      "aliases": ["longines spirit", "spirit zulu", "spirit zulu time", "l38", "l39"],
+      "resale": { "low": 1550, "median": 2250, "high": 3200 }, "liquidity": 3,
+      "note": "eBay active n=198; 71% new-w/box → asking skews high, deeper ~14% haircut applied"
+    },
+    {
+      "brand": "Longines", "model": "Master Collection",
+      "aliases": ["master collection", "longines master", "l2.909", "l2.673", "l2.793", "l2.628"],
+      "resale": { "low": 1300, "median": 1650, "high": 2380 }, "liquidity": 3,
+      "note": "eBay active n=180; 67% new-w/box → deeper haircut applied"
+    },
+    {
+      "brand": "Breitling", "model": "Navitimer",
+      "aliases": ["navitimer", "navitimer b01", "navitimer automatic", "ab01", "a23322"],
+      "resale": { "low": 2900, "median": 3550, "high": 4700 }, "liquidity": 4,
+      "note": "eBay active n=196, 1.6x spread"
+    },
+    {
+      "brand": "Breitling", "model": "Superocean",
+      "aliases": ["superocean", "super ocean", "superocean heritage", "superocean automatic"],
+      "resale": { "low": 2450, "median": 3000, "high": 3600 }, "liquidity": 3,
+      "note": "eBay active n=178, 1.4x spread"
+    },
+    {
+      "brand": "Grand Seiko", "model": "Spring Drive (incl. Snowflake)",
+      "aliases": ["grand seiko spring drive", "spring drive", "snowflake", "sbga211", "sbga", "sbgy", "sbge"],
+      "resale": { "low": 2800, "median": 3850, "high": 5850 }, "liquidity": 3,
+      "note": "eBay active n=187, 2.0x spread. Standalone 'snowflake' query was POLLUTED (11.9x, homage dials) — folded into SD line, which is clean"
+    },
+    {
+      "brand": "Grand Seiko", "model": "Elegance",
+      "aliases": ["grand seiko elegance", "elegance collection", "sbgw", "sbgk", "slgw"],
+      "resale": { "low": 3500, "median": 4200, "high": 5450 }, "liquidity": 3,
+      "note": "eBay active n=185, 1.5x spread"
+    },
+    {
+      "brand": "Zenith", "model": "Chronomaster",
+      "aliases": ["chronomaster", "el primero", "chronomaster sport", "chronomaster original", "chronomaster open"],
+      "resale": { "low": 3800, "median": 5650, "high": 8050 }, "liquidity": 2,
+      "note": "eBay active n=153 (47 off-model dropped), 2.1x spread"
+    },
+    {
+      "brand": "Panerai", "model": "Luminor",
+      "aliases": ["luminor", "luminor marina", "luminor due", "luminor base", "luminor gmt"],
+      "resale": { "low": 3300, "median": 3850, "high": 4500 }, "liquidity": 4,
+      "note": "eBay active n=196, 1.3x spread. Bare 'pam' ref deliberately EXCLUDED — spans both Luminor and Radiomir"
+    },
+    {
+      "brand": "Panerai", "model": "Radiomir",
+      "aliases": ["radiomir", "radiomir california", "radiomir black seal", "radiomir 1940"],
+      "resale": { "low": 3350, "median": 3950, "high": 5550 }, "liquidity": 3,
+      "note": "eBay active n=189, 1.6x spread"
+    },
+    {
+      "brand": "Oris", "model": "Aquis",
+      "aliases": ["aquis", "aquis date", "aquis gmt", "01 733"],
+      "resale": { "low": 970, "median": 1320, "high": 2000 }, "liquidity": 3,
+      "note": "eBay active n=169, 2.0x spread; new-w/box heavy, standard haircut"
+    },
+    {
+      "brand": "Oris", "model": "Divers Sixty-Five",
+      "aliases": ["divers sixty-five", "divers sixty five", "diver sixty-five", "diver 65", "divers 65", "01 733 77"],
+      "resale": { "low": 1300, "median": 1650, "high": 2050 }, "liquidity": 3,
+      "note": "eBay active n=148, 1.6x spread"
+    },
+    {
+      "brand": "TAG Heuer", "model": "Carrera",
+      "aliases": ["carrera", "carrera calibre", "carrera chronograph", "cbn20", "cbk2", "car2"],
+      "resale": { "low": 1300, "median": 1750, "high": 2650 }, "liquidity": 4,
+      "note": "eBay active n=199, 2.0x spread"
+    },
+    {
+      "brand": "TAG Heuer", "model": "Monaco",
+      "aliases": ["monaco", "monaco calibre", "monaco chronograph", "caw2", "cbl2"],
+      "resale": { "low": 3000, "median": 4600, "high": 6750 }, "liquidity": 3,
+      "note": "eBay active n=200, 2.2x spread"
+    },
+    {
+      "brand": "Rado", "model": "Captain Cook",
+      "aliases": ["captain cook", "captain cook automatic", "captain cook bronze", "captain cook high-tech"],
+      "resale": { "low": 900, "median": 1400, "high": 2000 }, "liquidity": 2,
+      "needsReview": true, "note": "UNRELIABLE — eBay 6x spread (quartz/vintage tail, P20 $449 vs P50 $2008). Median is a conservative guess at the AUTOMATIC; verify on Chrono24/WatchCharts before trusting"
     }
   ]
 }
