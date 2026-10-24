@@ -30,6 +30,12 @@ function Badges({ d }: { d: Deal }) {
   const age = AGE_META[d.ageTier];
   return (
     <>
+      {d.kind === "lowball" && d.maxOffer && (
+        <Tag className="border-brand/50 text-brand-hover uppercase tracking-wide">Lowball · offer ≤ {fmtMoney(d.maxOffer)}</Tag>
+      )}
+      {(d.flags?.length ?? 0) > 0 && !isSuspicious(d) && (
+        <Tag className="border-[#d9a441]/50 text-[#d9a441] uppercase tracking-wide">⚠ Vet seller</Tag>
+      )}
       {isSuspicious(d) && (
         <Tag className="border-[#e0685f]/60 bg-[#e0685f]/10 text-[#e0685f] uppercase tracking-wide">
           ⚠ Verify · {Math.round(d.discount * 100)}% off

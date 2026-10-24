@@ -1,5 +1,5 @@
 import type { NextApiRequest, NextApiResponse } from "next";
-import { fetchRedditListings } from "@/lib/reddit";
+import { scanWatchRecon, pushDeal } from "@/lib/watchrecon";
 import { fetchEbayListings, checkMarketplaceInsights } from "@/lib/ebay";
 import { evaluate } from "@/lib/scoring";
 import { watchlist } from "@/lib/watchlist";
@@ -14,12 +14,24 @@ interface SourceResult {
   error?: string;
   /** eBay brand searches that failed while others succeeded (partial degradation). */
   failedBrands?: string[];
+  evaluated?: number;
+  /** Hit the time budget; remaining posts are picked up next run. */
+  outOfTime?: boolean;
+}
+
+// Comp + seller-history lookups on a cold cache can take a few minutes.
+export const config = { maxDuration: 300 };
+
+function clampDays(v: unknown): number {
+  const n = Number(Array.isArray(v) ? v[0] : v);
+  return Number.isFinite(n) && n >= 1 ? Math.min(14, Math.floor(n)) : 2;
 }
 
 /**
  * GET /api/cron/scan-deals
- * Pulls new listings from Reddit + eBay, scores them against the watchlist,
- * dedups by listing id (Redis, 30-day TTL), and stores newly flagged deals.
+ * Pulls r/WE + r/watch_swap posts (via WatchRecon, live comps + seller history)
+ * and eBay listings (watchlist medians), stores flagged deals, and pushes new
+ * Reddit deals to the phone via ntfy.
  *
  * Resilient by design: each source runs in its own try/catch, so one API
  * failure never kills the run — results from the healthy source are still saved.
@@ -39,15 +51,40 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const sources: SourceResult[] = [];
   const allListings: RawListing[] = [];
 
-  // --- Reddit ---
+  // --- r/Watchexchange + r/watch_swap via WatchRecon ---
+  // Reddit blocks unauthenticated datacenter requests, so Reddit posts come from
+  // the WatchRecon mirror, scored against live comps (not watchlist medians).
+  // ?days=N widens the look-back (e.g. a daily deep sweep); default 2.
+  let wrStored = 0;
+  let wrPushed = 0;
+  const days = clampDays(req.query.days);
   try {
-    const listings = await fetchRedditListings();
-    allListings.push(...listings);
-    sources.push({ source: "reddit", ok: true, fetched: listings.length });
+    const wr = await scanWatchRecon({
+      days,
+      minNet: Number(process.env.MIN_NET_PROFIT) || 300,
+      budgetMs: 240_000,
+    });
+    for (const deal of wr.deals) {
+      try {
+        await upsertDeal(deal);
+        wrStored++;
+      } catch (e) {
+        console.error("[scan-deals] upsert failed for", deal.id, (e as Error).message);
+      }
+    }
+    for (const deal of wr.newDeals) {
+      try {
+        await pushDeal(deal);
+        wrPushed++;
+      } catch (e) {
+        console.error("[scan-deals] push failed for", deal.id, (e as Error).message);
+      }
+    }
+    sources.push({ source: "watchrecon", ok: true, fetched: wr.fetched, evaluated: wr.evaluated, outOfTime: wr.outOfTime });
   } catch (e) {
     const msg = (e as Error).message;
-    console.error("[scan-deals] Reddit source failed:", msg);
-    sources.push({ source: "reddit", ok: false, fetched: 0, error: msg });
+    console.error("[scan-deals] WatchRecon source failed:", msg);
+    sources.push({ source: "watchrecon", ok: false, fetched: 0, error: msg });
   }
 
   // --- eBay ---
@@ -142,6 +179,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     tookMs: Date.now() - startedAt,
     sources,
     listings: allListings.length,
+    redditDealsStored: wrStored,
+    redditDealsPushed: wrPushed,
     dealsMatched: matched,
     dealsStored: stored,
     newDeals,

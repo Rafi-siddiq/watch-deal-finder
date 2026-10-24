@@ -1,0 +1,19 @@
+# Runs the deal scan every 15 minutes (Vercel's free plan only allows a daily cron).
+# Repo secrets needed: APP_URL (e.g. https://your-app.vercel.app) and CRON_SECRET (same value as on Vercel).
+name: scan-deals
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Trigger scan
+        run: |
+          curl -sS --fail-with-body -m 300 \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            "${{ secrets.APP_URL }}/api/cron/scan-deals"

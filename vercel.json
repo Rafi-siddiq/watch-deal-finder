@@ -1,7 +1,7 @@
 {
   "crons": [
     {
-      "path": "/api/cron/scan-deals",
+      "path": "/api/cron/scan-deals?days=7",
       "schedule": "0 14 * * *"
     }
   ]

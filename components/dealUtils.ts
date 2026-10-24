@@ -46,6 +46,15 @@ export function suggestedOffer(price: number, ageTier: AgeTier): { pct: number; 
   return { pct, offer: Math.max(1, Math.round(price * (1 - pct))) };
 }
 
+/** Lowball deals carry a comp-based max offer (still nets $400); use it when it's lower. */
+export function offerFor(deal: Deal): { pct: number; offer: number; basis: string } {
+  const age = suggestedOffer(deal.price, deal.ageTier);
+  if (deal.maxOffer && deal.maxOffer < age.offer) {
+    return { pct: 1 - deal.maxOffer / deal.price, offer: deal.maxOffer, basis: "max offer that still nets $400" };
+  }
+  return { ...age, basis: `${Math.round(age.pct * 100)}% off for ${AGE_META[deal.ageTier].label.toLowerCase()} listing` };
+}
+
 export function draftOfferMessage(deal: Deal, offer: number): string {
   return `Hi — I'm interested in your "${deal.title}". Would you consider $${offer.toLocaleString(
     "en-US"

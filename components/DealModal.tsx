@@ -7,7 +7,7 @@ import {
   fmtWhen,
   SOURCE_META,
   AGE_META,
-  suggestedOffer,
+  offerFor,
   draftOfferMessage,
   upscaleEbayImage,
   isSuspicious,
@@ -40,6 +40,9 @@ export default function DealModal({ deal: d, visible, onClose }: { deal: Deal; v
     );
   if (d.underDescribed)
     caveats.push("Sparse listing: thin title with few details — confirm condition, box/papers, and authenticity.");
+  caveats.push(...(d.flags ?? []));
+  if (d.seller)
+    caveats.push("Check the seller on the Universal Scammer List and confirm the post is still open. Pay PayPal G&S only.");
   const caveatColor = suspicious ? "#e0685f" : "#d9a441";
 
   const gallery = useMemo(() => {
@@ -48,7 +51,7 @@ export default function DealModal({ deal: d, visible, onClose }: { deal: Deal; v
   }, [d.imageUrl, d.additionalImageUrls]);
   const [active, setActive] = useState(0);
 
-  const { pct, offer } = suggestedOffer(d.price, d.ageTier);
+  const { offer, basis } = offerFor(d);
   const message = draftOfferMessage(d, offer);
   const [copied, setCopied] = useState(false);
   const copy = async () => {
@@ -163,6 +166,18 @@ export default function DealModal({ deal: d, visible, onClose }: { deal: Deal; v
           {d.fullSet !== undefined && <Row label="Box & papers" value={d.fullSet ? "Full set" : "Watch only"} />}
           {d.refNumber && <Row label="Reference" value={d.refNumber} />}
           <Row label="Listing age" value={`${d.daysListed} day${d.daysListed === 1 ? "" : "s"} (${age.label})`} />
+          {d.reposts ? <Row label="Reposts" value={`${d.reposts}×${d.firstPrice && d.firstPrice > d.price ? ` · first ask ${fmtMoney(d.firstPrice)}` : ""}`} /> : null}
+          {d.compBasis && <Row label="Comp" value={d.compBasis} />}
+          {d.seller && (
+            <Row
+              label="Seller"
+              value={
+                <a href={d.uslUrl} target="_blank" rel="noopener noreferrer" className="text-brand underline-offset-2 hover:underline">
+                  u/{d.seller} · {(d.sellerPosts ?? 0) >= 50 ? "50+" : d.sellerPosts} posts · scam list ↗
+                </a>
+              }
+            />
+          )}
           {d.scoreModifier !== 1 && (
             <Row label="Score adjustment" value={`×${d.scoreModifier.toFixed(2)}`} valueClass="text-brand-hover" />
           )}
@@ -173,13 +188,9 @@ export default function DealModal({ deal: d, visible, onClose }: { deal: Deal; v
           <p className="mb-1 font-mono text-[10px] uppercase tracking-[0.14em] text-brand-hover">Suggested offer</p>
           <div className="flex items-baseline justify-between">
             <span className="font-serif text-2xl font-semibold text-foreground">{fmtMoney(offer)}</span>
-            <span className="font-mono text-[11px] text-muted">
-              {fmtMoney(d.price)} − {Math.round(pct * 100)}% ({age.label})
-            </span>
+            <span className="font-mono text-[11px] text-muted">ask {fmtMoney(d.price)}</span>
           </div>
-          <p className="mt-1 font-mono text-[11px] text-muted">
-            Older listings get a deeper lowball — Ancient scales down more than Stale.
-          </p>
+          <p className="mt-1 font-mono text-[11px] text-muted">{basis}</p>
           <div className="mt-3 rounded-xl border border-border bg-background p-2.5 font-mono text-[12px] leading-relaxed text-[#c7c3b6]">
             {message}
           </div>
