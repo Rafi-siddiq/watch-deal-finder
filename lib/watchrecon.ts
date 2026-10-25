@@ -1,5 +1,5 @@
 import { Redis } from "@upstash/redis";
-import type { Deal } from "./types";
+import type { Deal, RawListing } from "./types";
 
 /**
  * WatchRecon mirrors r/Watchexchange (RWX) and r/watch_swap (RWS) and keeps every
@@ -31,7 +31,7 @@ const SCAM_RATIO = 0.6;
 const COLLECTION_MAX_RATIO = 0.9;
 
 /** Models that are under 40mm when the title doesn't state a size. */
-const SMALL_MODELS = /black bay 5[48]|bb5[48]|\b79(0[0-3]0|93\d)|1926 3[69]|ranger 36|tudor.*(prince|oysterdate|royal 3[468])|sbg[xwkp]\d|sbgy|sarb0(33|35|59|65)|alpinist.*(spb121|spb155|sarb017)|62mas|spb143|aqua terra.*(36|38)|255[12]|256[12]|seamaster 120|constellation|speedmaster reduced|3510\.|tangente|orion|club campus|ludwig|metro|sinn.*556|longines spirit 37|legend diver 36|master collection|conquest 38|kuoe|lorier|farer|furlan marri|serica|halios|baltic|nivada|monta|kurono|underd0g|\bbrew\b|nodus|christopher ward.*(36|38|twelve)|formex essence|king seiko|credor|tank (must|solo|francaise)|santos galbee|khaki field|intra-?matic 38|explorer 36|1427\d|datejust 36|1623\d|oyster perpetual 3[46]|air.?king|reverso|calatrava|oris.*(65|sixty.?five).*3[68]|pointer date 36/i;
+const SMALL_MODELS = /black bay 5[48]|bb5[48]|\b79(0[0-3]0|93\d)|1926 3[69]|ranger 36|tudor.*(prince|oysterdate|royal 3[468])|sbg[xwkp]\d|sbgy|sarb0(33|35|59|65)|alpinist.*(spb121|spb155|sarb017)|62mas|spb143|aqua terra.*(36|38)|255[12]|256[12]|seamaster 120|constellation|speedmaster reduced|3510\.|tangente|orion|club campus|ludwig|metro|sinn.*556|longines spirit 37|legend diver 36|master collection|conquest 38|kuoe|lorier|\bfarer\b|furlan marri|serica|halios|baltic|nivada|monta|kurono|underd0g|\bbrew\b|nodus|christopher ward.*(36|38|twelve)|formex essence|king seiko|credor|tank (must|solo|francaise)|santos galbee|khaki field|intra-?matic 38|explorer 36|1427\d|datejust 36|1623\d|oyster perpetual 3[46]|air.?king|reverso|calatrava|oris.*(65|sixty.?five).*3[68]|pointer date 36/i;
 const NOT_SMALL = /\b4\d(\.\d)?\s?mm\b|\bxl\b|\blarge\b|gmt.?master|big crown pointer date 40|planet ocean|marinemaster|tuna/i;
 /** Already owned — never suggest for the collection. */
 const OWNED = /tissot.*prx|\bprx\b/i;
@@ -61,7 +61,7 @@ const MODEL_COMPS: [RegExp, number][] = [
   [/oris.*(divers? )?sixty.?five.*40/i, 1100], [/oris.*big crown pointer date.*40/i, 900],
   [/hamilton.*khaki field mechanical/i, 450], [/hamilton.*khaki field.*auto/i, 550],
   [/tudor.*black bay 58|bb58/i, 3050], [/tudor.*ranger.*39|79950/i, 2650],
-  [/omega.*speedmaster reduced/i, 2600], [/baltic.*aquascaphe/i, 550], [/farer/i, 950],
+  [/omega.*speedmaster reduced/i, 2600], [/baltic.*aquascaphe/i, 550], [/\bfarer\b/i, 950],
   [/seiko.*alpinist.*sarb017/i, 700], [/sarb033/i, 650], [/sbgp013/i, 1800],
 ];
 
@@ -283,13 +283,87 @@ async function historyFor(l: WrListing): Promise<SellerHistory> {
 
 const netAt = (resale: number, buy: number) => Math.round(SALE_KEEP * resale - SALE_COST - buy);
 
+/** Popular microbrands: get their own tab, smaller profit targets, similar-listing comps. */
+const MICRO = /\b(traska|kuoe|maen|lorier|baltic|farer|furlan marri|serica|halios|nivada|monta|kurono|underd0g|underdog|\bbrew\b|nodus|christopher ward|formex|beaubleu|unimatic|vaer|yema|zodiac|doxa|squale|oak (?:&|and) oscar|autodromo|mk ?ii|raven|anordain|echo.?neutra|straton|boldr|dan henry|marloe|aera|axios|wolbrook|feynman|isotope|ming|sternglas|delma)\b/i;
+/** Profit target for a microbrand lowball (smaller watches, smaller margins). */
+const MICRO_TARGET_NET = 200;
+const MICRO_MAX_RATIO = 0.9;
+
+/**
+ * Old / tired pieces that sit unsold: unserviced vintage, "as is", untested, rough.
+ * eBay gets the strict version (no vintage at all); Reddit sellers usually service
+ * vintage, so there only the condition words apply.
+ */
+const ROUGH = /\bas[- ]is\b|untested|not tested|not running|non[- ]?working|needs? (?:service|repair|work|cleaning|battery)|no maintenance|for repair|project watch|restoration|heavy wear|heavily worn|scratched|dented|cracked crystal|dirty|tarnish|\bpatina\b.*\b(?:dial|hands)\b.*\bdamage/i;
+const EBAY_VINTAGE = /\bvintage\b|\bantique\b|\bestate\b|\b19[0-8]\ds?\b|\bpocket watch\b|\bmanual wind(?:ing)?\b.*\b19|\b(?:ladies|lady|lady's|women'?s|womens|ladymatic|boys?)\b|\b(?:2[0-9]|3[0-1])\s?mm\b|tuning fork|\bgold[- ]?(?:tone|plated|filled)\b|\bgp\b|\bdial (?:&|and) hands\b|\bhands (?:&|and) dial\b|\bdial only\b|\bjunk\b|\bwatch king\b/i;
+
+type Comp = { resale: number; basis: string; compCount: number; byName: boolean };
+
+/** Reference comps first, then the model table, then (when allowed) similar titles. */
+async function compOf(title: string, seller: string, allowName: boolean): Promise<Comp | null> {
+  const ref = refOf(title);
+  if (ref) {
+    const c = await compFor(ref, seller);
+    if (c) return { resale: c.med, basis: `${ref} median of ${c.n} asks`, compCount: c.n, byName: false };
+  }
+  const m = MODEL_COMPS.find(([re]) => re.test(title));
+  if (m) return { resale: m[1], basis: "model table", compCount: 0, byName: false };
+  if (allowName) {
+    const c = await compByName({ title, user: seller } as WrListing);
+    if (c) return { resale: c.med, basis: `median of ${c.n} similar listings`, compCount: c.n, byName: true };
+  }
+  return null;
+}
+
+interface Verdict {
+  kind: NonNullable<Deal["kind"]>;
+  net: number;
+  maxOffer: number;
+  score: number;
+}
+
+/**
+ * Decide what (if anything) a priced, comped listing is good for.
+ * daysUp is null when the age is unknown (then lowball kinds are skipped).
+ */
+function judge(price: number, comp: Comp, title: string, daysUp: number | null, opts: ScanOptions, flagged: boolean): Verdict | null {
+  const { resale, byName } = comp;
+  const net = netAt(resale, price);
+  const maxOffer = Math.round(SALE_KEEP * resale - SALE_COST - LOWBALL_TARGET_NET);
+  const microOffer = Math.round(SALE_KEEP * resale - SALE_COST - MICRO_TARGET_NET);
+  const ratio = price / resale;
+  const cap = (s: number) => Math.max(0, Math.min(flagged ? 65 : 100, Math.round(s) - (flagged ? 15 : 0)));
+  const aged = daysUp !== null && daysUp >= LOWBALL_MIN_DAYS;
+
+  // Similar-title comps are good enough to spot a fair price, not to bank a big flip on.
+  if (!byName && net >= opts.minNet) return { kind: "fresh", net, maxOffer, score: cap(60 + net / 25) };
+  if (!byName && aged && maxOffer < price && maxOffer >= LOWBALL_MIN_OFFER_RATIO * price) {
+    return { kind: "lowball", net, maxOffer, score: cap(50 + ((maxOffer / price - LOWBALL_MIN_OFFER_RATIO) / (1 - LOWBALL_MIN_OFFER_RATIO)) * 35) };
+  }
+  if (MICRO.test(title)) {
+    // Already under market: the ask is the deal, so no "offer up to" (it can be at or below zero on cheap pieces).
+    if (ratio <= MICRO_MAX_RATIO) return { kind: "micro", net, maxOffer: 0, score: cap(60 + (1 - ratio - (1 - MICRO_MAX_RATIO)) * 200) };
+    if (aged && microOffer < price && microOffer >= 0.7 * price) {
+      return { kind: "micro", net, maxOffer: microOffer, score: cap(50 + ((microOffer / price - 0.7) / 0.3) * 30) };
+    }
+  }
+  if (price <= opts.collectionMax && ratio <= COLLECTION_MAX_RATIO && isSmall(title) && !OWNED.test(title)) {
+    return { kind: "collection", net, maxOffer, score: cap(60 + (1 - ratio - (1 - COLLECTION_MAX_RATIO)) * 200) };
+  }
+  return null;
+}
+
+function ageTierOf(days: number): Deal["ageTier"] {
+  return days >= 90 ? "ancient" : days >= LOWBALL_MIN_DAYS ? "stale" : days >= 13 ? "aging" : "fresh";
+}
+
 export interface ScanOptions {
   /** Look-back for listings (days). Reposts bump old watches into this window. */
   days: number;
   /** Fresh-deal profit floor at full ask. */
   minNet: number;
-  /** Stop starting new work after this many ms (serverless time budget). */
-  budgetMs: number;
+  /** Stop starting new work at this timestamp (serverless time budget). */
+  deadline: number;
   /** MAX_PURCHASE_PRICE; Infinity = no budget. Over-budget deals are flagged, not dropped. */
   maxPrice: number;
   /** COLLECTION_MAX_PRICE: ceiling for personal-collection picks. */
@@ -300,21 +374,16 @@ export interface ScanResult {
   fetched: number;
   evaluated: number;
   deals: Deal[];
-  /** Deals not previously stored — the ones worth a push alert. */
-  newDeals: Deal[];
   /** Deal ids whose watch now shows as sold — remove them from the dashboard. */
   soldIds: string[];
   outOfTime: boolean;
 }
 
 /**
- * Pull recent RWX + RWS posts, comp each one, and flag two kinds of deal:
- *  - fresh:   ask already nets >= minNet against comps
- *  - lowball: up >= 21 days across reposts, and an offer >= 60% of ask still nets $400
- * Each post is evaluated once per 12h (Redis), so runs every 15 min stay cheap.
+ * Pull recent RWX + RWS posts, comp each one, and flag fresh flips, lowballs,
+ * microbrand deals and collection picks. Each post is evaluated once per 12h.
  */
 export async function scanWatchRecon(opts: ScanOptions): Promise<ScanResult> {
-  const started = Date.now();
   const listings: WrListing[] = [];
   for (const src of SOURCES) {
     for (let p = 1; p <= (opts.days > 1 ? 8 : 3); p++) {
@@ -326,7 +395,6 @@ export async function scanWatchRecon(opts: ScanOptions): Promise<ScanResult> {
   }
 
   const deals: Deal[] = [];
-  const newDeals: Deal[] = [];
   const soldIds: string[] = [];
   let evaluated = 0;
   let outOfTime = false;
@@ -340,59 +408,34 @@ export async function scanWatchRecon(opts: ScanOptions): Promise<ScanResult> {
     // Deals are stored per seller+watch, so a repost replaces the old post's card.
     const dealId = wk.replace(/[^A-Za-z0-9_.-]/g, "_");
     if (l.sold) { soldIds.push(dealId); continue; }
-    if (Date.now() - started > opts.budgetMs) { outOfTime = true; break; }
-    if (!l.price || NOT_WATCH.test(l.title) || ACCOUNT_BLOCKLIST.test(l.user)) continue;
+    if (Date.now() > opts.deadline) { outOfTime = true; break; }
+    if (!l.price || NOT_WATCH.test(l.title) || ROUGH.test(l.title) || ACCOUNT_BLOCKLIST.test(l.user)) continue;
 
     const evalKey = `wr:eval:${l.postId}`;
     if (await redis().get(evalKey)) continue;
     evaluated++;
-
-    let resale: number | null = null;
-    let basis = "";
-    let compCount = 0;
-    const ref = refOf(l.title);
-    if (ref) {
-      const c = await compFor(ref, l.user);
-      if (c) { resale = c.med; basis = `${ref} median of ${c.n} asks`; compCount = c.n; }
-    }
-    if (!resale) {
-      const m = MODEL_COMPS.find(([re]) => re.test(l.title));
-      if (m) { resale = m[1]; basis = "model table"; }
-    }
-    // Collection-sized watches are often listed without a reference: compare against similar titles.
-    if (!resale && l.price <= opts.collectionMax && isSmall(l.title)) {
-      const c = await compByName(l);
-      if (c) { resale = c.med; basis = `median of ${c.n} similar listings`; compCount = c.n; }
-    }
+    const allowName = MICRO.test(l.title) || (l.price <= opts.collectionMax && isSmall(l.title));
+    const comp = await compOf(l.title, l.user, allowName);
     await redis().set(evalKey, 1, { ex: 12 * 3600 });
-    if (!resale) continue;
+    if (!comp) continue;
     // Under 30% of comps is a part/accessory the filter missed, a typo, or a scam — never a real deal.
-    if (l.price < 0.3 * resale) continue;
-
-    const net = netAt(resale, l.price);
-    const maxOffer = Math.round(SALE_KEEP * resale - SALE_COST - LOWBALL_TARGET_NET);
-    const lowballPossible = maxOffer >= LOWBALL_MIN_OFFER_RATIO * l.price && maxOffer < l.price;
-    const collectionPossible =
-      l.price <= opts.collectionMax && l.price <= COLLECTION_MAX_RATIO * resale && isSmall(l.title) && !OWNED.test(l.title);
-    if (net < opts.minNet && !lowballPossible && !collectionPossible) continue;
+    if (l.price < 0.3 * comp.resale) continue;
+    // Cheap pre-check (no history yet): could this be anything at all?
+    if (!judge(l.price, comp, l.title, 9999, opts, false)) continue;
 
     const h = await historyFor(l);
     const daysUp = Math.floor((Date.now() - h.firstPostedAt) / DAY_MS);
-    // Similar-title comps are good enough to spot a fair collection price, not to bank a flip on.
-    const nameComp = basis.includes("similar listings");
-    let kind: Deal["kind"];
-    if (net >= opts.minNet && !nameComp) kind = "fresh";
-    else if (lowballPossible && daysUp >= LOWBALL_MIN_DAYS && !nameComp) kind = "lowball";
-    else if (collectionPossible) kind = "collection";
-    else continue;
-
     const sellerDays = Math.floor((Date.now() - h.sellerSince) / DAY_MS);
     const flags: string[] = [];
-    if (l.price < SCAM_RATIO * resale) flags.push(`${Math.round((1 - l.price / resale) * 100)}% under comps — classic scam pattern, vet hard`);
+    if (l.price < SCAM_RATIO * comp.resale) flags.push(`${Math.round((1 - l.price / comp.resale) * 100)}% under comps — classic scam pattern, vet hard`);
     if (h.totalPosts <= 2 && sellerDays < 30) flags.push("New seller: little or no posting history");
-    if (basis === "model table") flags.push("Comp from model table, not live asks — confirm variant/size");
+    if (comp.basis === "model table") flags.push("Comp from model table, not live asks — confirm variant/size");
 
-    const deal: Deal = {
+    const v = judge(l.price, comp, l.title, daysUp, opts, flags.length > 0);
+    if (!v) continue;
+    const ref = refOf(l.title);
+    const now = Date.now();
+    deals.push({
       source: "reddit",
       id: dealId,
       title: l.title,
@@ -401,90 +444,121 @@ export async function scanWatchRecon(opts: ScanOptions): Promise<ScanResult> {
       brand: l.brand || (l.title.split(/\s+/)[0] ?? ""),
       imageUrl: l.imageUrl,
       model: ref ?? "",
-      median: resale,
-      discount: Math.max(0, 1 - l.price / resale),
-      // Fresh: 60 + $25 of net per point. Lowball: 50 at a 60%-of-ask offer, 85 when the max offer is near ask.
-      // Collection: 60 at 10% under comps, +2 per extra point of discount.
-      // Flagged deals (scam pattern, new seller, rough comp) never outrank clean ones.
-      score: Math.max(0, Math.min(flags.length ? 65 : 100, Math.round(
-        kind === "fresh"
-          ? 60 + net / 25
-          : kind === "lowball"
-            ? 50 + ((maxOffer / l.price - LOWBALL_MIN_OFFER_RATIO) / (1 - LOWBALL_MIN_OFFER_RATIO)) * 35
-            : 60 + (1 - l.price / resale - (1 - COLLECTION_MAX_RATIO)) * 200
-      ) - (flags.length ? 15 : 0))),
+      median: comp.resale,
+      discount: Math.max(0, 1 - l.price / comp.resale),
+      score: v.score,
       scoreModifier: 1,
       underDescribed: false,
-      foundAt: Date.now(),
+      foundAt: now,
       createdAt: h.firstPostedAt,
       refNumber: ref ?? undefined,
-      needsReview: basis === "model table",
-      estimatedNetProfit: kind === "lowball" ? LOWBALL_TARGET_NET : net,
-      withinBudget: (kind === "lowball" ? maxOffer : l.price) <= (kind === "collection" ? opts.collectionMax : opts.maxPrice),
+      needsReview: comp.basis === "model table",
+      estimatedNetProfit: v.kind === "lowball" ? LOWBALL_TARGET_NET : v.kind === "micro" && v.net < MICRO_TARGET_NET ? MICRO_TARGET_NET : v.net,
+      withinBudget: (v.kind === "lowball" ? v.maxOffer : l.price) <= (v.kind === "collection" ? opts.collectionMax : opts.maxPrice),
       caseMm: caseSizeOf(l.title),
       daysListed: daysUp,
       staleAfterDays: LOWBALL_MIN_DAYS,
       stale: daysUp >= LOWBALL_MIN_DAYS,
-      ageTier: daysUp >= 90 ? "ancient" : daysUp >= LOWBALL_MIN_DAYS ? "stale" : daysUp >= 13 ? "aging" : "fresh",
-      firstSeenAt: Date.now(),
-      lastConfirmedActiveAt: Date.now(),
-      kind,
+      ageTier: ageTierOf(daysUp),
+      firstSeenAt: now,
+      lastConfirmedActiveAt: now,
+      lastPostedAt: parseWhen(l.when, now),
+      kind: v.kind,
       sub: l.sub,
       seller: l.user,
       sellerSinceDays: sellerDays,
       sellerPosts: h.totalPosts,
       reposts: h.reposts,
       firstPrice: h.firstPrice,
-      maxOffer,
-      compBasis: basis,
-      compCount,
+      maxOffer: v.maxOffer,
+      compBasis: comp.basis,
+      compCount: comp.compCount,
       flags,
       uslUrl: `https://www.reddit.com/r/UniversalScammerList/wiki/database/${l.user.toLowerCase()}`,
-    };
-    deals.push(deal);
-
-    // Alert once per seller+watch; reposts only re-alert after a real price drop (>= 5%).
-    const lastPushed = await redis().get<number>(`wr:pushed:${dealId}`);
-    if (!lastPushed || l.price <= lastPushed * 0.95) newDeals.push(deal);
+    });
   }
 
-  return { fetched: listings.length, evaluated, deals, newDeals, soldIds, outOfTime };
+  return { fetched: listings.length, evaluated, deals, soldIds, outOfTime };
 }
 
 /**
- * Phone push via ntfy.sh (free app, no account). Topic name is the only "key".
- * Returns false when no topic is configured; throws if ntfy rejects the message.
+ * Score eBay listings with the same live comps and rules as Reddit (reference
+ * comps from WatchRecon asks), after stricter junk filtering: no vintage, ladies,
+ * parts, rough or "as is" pieces, low-feedback sellers, or parts-condition items.
+ * Price includes shipping.
  */
-export async function pushDeal(d: Deal): Promise<boolean> {
-  const topic = process.env.NTFY_TOPIC;
-  if (!topic) return false;
-  // HTTP header values must be ASCII, so the title spells out "<=".
-  const head =
-    d.kind === "lowball"
-      ? `Lowball: offer <= $${d.maxOffer} (ask $${d.price}, up ${d.daysListed}d)`
-      : d.kind === "collection"
-        ? `For you: $${d.price}, ${Math.round(d.discount * 100)}% under market${d.caseMm ? `, ${d.caseMm}mm` : ""}`
-        : `Flip: ~$${d.estimatedNetProfit} net at $${d.price}`;
-  const lines = [
-    d.title,
-    `Resale ~$${d.median} (${d.compBasis})`,
-    `u/${d.seller} · ${(d.sellerPosts ?? 0) >= 200 ? "200+" : d.sellerPosts} posts over ${d.sellerSinceDays}d${d.reposts ? ` · reposted ${d.reposts}x` : ""}`,
-    ...(d.flags ?? []).map((f) => `⚠ ${f}`),
-    "Check USL + confirm still open before paying. G&S only.",
-  ];
-  const res = await fetch(`https://ntfy.sh/${encodeURIComponent(topic)}`, {
-    method: "POST",
-    headers: {
-      Title: head.replace(/[^\x20-\x7E]/g, ""),
-      Click: d.url,
-      Tags: d.flags?.length ? "warning,watch" : "watch",
-      Priority: d.kind === "fresh" ? "high" : "default",
-      Actions: `view, Scam list, ${d.uslUrl}`,
-    },
-    body: lines.join("\n"),
-  });
-  if (!res.ok) throw new Error(`ntfy HTTP ${res.status}`);
-  // Recorded only after a successful push, so deals found before alerts were set up still alert.
-  await redis().set(`wr:pushed:${d.id}`, d.price, { ex: 30 * 24 * 3600 });
-  return true;
+export async function scanEbay(listings: RawListing[], opts: ScanOptions): Promise<{ evaluated: number; deals: Deal[]; outOfTime: boolean }> {
+  const deals: Deal[] = [];
+  let evaluated = 0;
+  let outOfTime = false;
+  for (const l of listings) {
+    if (Date.now() > opts.deadline) { outOfTime = true; break; }
+    if (!l.price || l.price < PRICE_MIN) continue;
+    if (NOT_WATCH.test(l.title) || ROUGH.test(l.title) || EBAY_VINTAGE.test(l.title)) continue;
+    if (/parts|not working/i.test(l.condition ?? "")) continue;
+    if (l.leafCategoryIds?.length && !l.leafCategoryIds.includes("31387")) continue;
+    if ((l.sellerFeedback ?? 0) < 20 || (l.sellerPositivePct ?? 100) < 97) continue;
+
+    const evalKey = `wr:eeval:${l.id}`;
+    if (await redis().get(evalKey)) continue;
+    evaluated++;
+    const seller = l.sellerName ?? "";
+    const allowName = MICRO.test(l.title) || (l.price <= opts.collectionMax && isSmall(l.title));
+    const comp = await compOf(l.title, seller, allowName);
+    await redis().set(evalKey, 1, { ex: 12 * 3600 });
+    if (!comp) continue;
+    const total = l.price + (l.shippingCost ?? 0);
+    if (total < 0.3 * comp.resale) continue;
+
+    const daysUp = Math.max(0, Math.floor((Date.now() - l.createdAt) / DAY_MS));
+    const flags: string[] = [];
+    if (total < SCAM_RATIO * comp.resale) flags.push(`${Math.round((1 - total / comp.resale) * 100)}% under comps — check it's the real model, complete and genuine`);
+    if (comp.basis === "model table") flags.push("Comp from model table, not live asks — confirm variant/size");
+    if (l.shippingCost === undefined) flags.push("Shipping cost not shown — check before buying");
+
+    const v = judge(total, comp, l.title, daysUp, opts, flags.length > 0);
+    if (!v) continue;
+    const ref = refOf(l.title);
+    const now = Date.now();
+    deals.push({
+      source: "ebay",
+      id: l.id,
+      title: l.title,
+      url: l.url,
+      price: total,
+      brand: l.title.split(/\s+/)[0] ?? "",
+      imageUrl: l.imageUrl,
+      model: ref ?? "",
+      median: comp.resale,
+      discount: Math.max(0, 1 - total / comp.resale),
+      score: v.score,
+      scoreModifier: 1,
+      underDescribed: false,
+      foundAt: now,
+      createdAt: l.createdAt,
+      refNumber: ref ?? undefined,
+      condition: l.condition,
+      needsReview: comp.basis === "model table",
+      estimatedNetProfit: v.kind === "lowball" ? LOWBALL_TARGET_NET : v.net,
+      withinBudget: (v.kind === "lowball" ? v.maxOffer : total) <= (v.kind === "collection" ? opts.collectionMax : opts.maxPrice),
+      caseMm: caseSizeOf(l.title),
+      daysListed: daysUp,
+      staleAfterDays: LOWBALL_MIN_DAYS,
+      stale: daysUp >= LOWBALL_MIN_DAYS,
+      ageTier: ageTierOf(daysUp),
+      firstSeenAt: now,
+      lastConfirmedActiveAt: now,
+      kind: v.kind,
+      seller,
+      sellerFeedback: l.sellerFeedback,
+      sellerPositivePct: l.sellerPositivePct,
+      shippingIncluded: l.shippingCost,
+      country: l.country,
+      maxOffer: v.maxOffer,
+      compBasis: comp.basis,
+      compCount: comp.compCount,
+      flags,
+    });
+  }
+  return { evaluated, deals, outOfTime };
 }

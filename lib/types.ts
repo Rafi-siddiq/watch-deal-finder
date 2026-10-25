@@ -17,6 +17,15 @@ export interface RawListing {
   additionalImageUrls?: string[];
   /** Structured condition from the source (eBay Browse API). Reddit has none. */
   condition?: string;
+  // --- eBay Browse extras ---
+  price?: number;
+  /** Cheapest listed shipping; 0 = free. */
+  shippingCost?: number;
+  sellerName?: string;
+  sellerFeedback?: number;
+  sellerPositivePct?: number;
+  /** Item location country code, e.g. "US", "JP". */
+  country?: string;
 }
 
 export interface WatchModel {
@@ -96,8 +105,9 @@ export interface Deal {
   /**
    * "fresh": ask already profitable. "lowball": sat >= 21 days, an offer can hit the $400 target.
    * "collection": personal-collection pick (under 40mm, under the collection budget, below comps).
+   * "micro": popular microbrand priced under comps, or sitting long enough for a ~$200 lowball.
    */
-  kind?: "fresh" | "lowball" | "collection";
+  kind?: "fresh" | "lowball" | "collection" | "micro";
   /** Case size parsed from the title, when stated. */
   caseMm?: number;
   sub?: "Watchexchange" | "watch_swap";
@@ -117,4 +127,13 @@ export interface Deal {
   flags?: string[];
   /** Universal Scammer List lookup for the seller. */
   uslUrl?: string;
+  /** When the seller last posted / bumped this watch (Reddit). Old = probably sold. */
+  lastPostedAt?: number;
+  /** eBay seller feedback count and positive %. */
+  sellerFeedback?: number;
+  sellerPositivePct?: number;
+  /** Shipping included in `price` (eBay). */
+  shippingIncluded?: number;
+  /** Item ships from (eBay country code). */
+  country?: string;
 }

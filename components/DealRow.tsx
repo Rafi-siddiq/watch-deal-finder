@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { Deal } from "@/lib/types";
-import { fmtMoney, fmtWhen, offerFor, draftOfferMessage } from "@/components/dealUtils";
+import { fmtMoney, fmtWhen, offerFor, draftOfferMessage, maybeSold, daysSincePosted } from "@/components/dealUtils";
 
 /** Listing photo with a watch-glyph fallback (missing / broken image). */
 function Photo({ url }: { url?: string }) {
@@ -55,7 +55,8 @@ function ActionButton({ onClick, children }: { onClick: () => void; children: Re
 
 /** The headline numbers, phrased per deal type the way you'd act on them. */
 function Numbers({ d }: { d: Deal }) {
-  if (d.kind === "lowball" && d.maxOffer) {
+  // Lowballs, and microbrands whose value is in an offer below the ask.
+  if ((d.kind === "lowball" || d.kind === "micro") && d.maxOffer && d.maxOffer >= 0.5 * d.price && d.maxOffer < d.price) {
     return (
       <div className="grid grid-cols-3 gap-3">
         <Stat label="Offer up to" value={fmtMoney(d.maxOffer)} className="text-brand" />
@@ -64,7 +65,7 @@ function Numbers({ d }: { d: Deal }) {
       </div>
     );
   }
-  if (d.kind === "collection") {
+  if (d.kind === "collection" || d.kind === "micro") {
     return (
       <div className="grid grid-cols-3 gap-3">
         <Stat label="Asking" value={fmtMoney(d.price)} className="text-foreground" />
@@ -92,7 +93,32 @@ function ageLine(d: Deal): string {
   if (d.reposts) parts.push(`reposted ${d.reposts}×`);
   if (d.firstPrice && d.firstPrice > d.price) parts.push(`first asked ${fmtMoney(d.firstPrice)}`);
   if (d.caseMm) parts.push(`${d.caseMm}mm`);
+  if (d.source === "ebay") {
+    if (d.shippingIncluded) parts.push(`incl. ${fmtMoney(d.shippingIncluded)} shipping`);
+    else if (d.shippingIncluded === 0) parts.push("free shipping");
+    if (d.country && d.country !== "US") parts.push(`ships from ${d.country}`);
+  }
   return parts.join(" · ");
+}
+
+function SellerLine({ d }: { d: Deal }) {
+  if (!d.seller) return null;
+  if (d.source === "ebay") {
+    return (
+      <>
+        {" · "}eBay {d.seller}{" "}
+        <span className="text-muted">
+          ({(d.sellerFeedback ?? 0).toLocaleString("en-US")} feedback{d.sellerPositivePct ? `, ${d.sellerPositivePct}%` : ""})
+        </span>
+      </>
+    );
+  }
+  return (
+    <>
+      {" · "}u/{d.seller}{" "}
+      <span className="text-muted">({(d.sellerPosts ?? 0) >= 200 ? "200+" : d.sellerPosts} posts)</span>
+    </>
+  );
 }
 
 export default function DealRow({ deal: d, hidden, onToggleHide }: { deal: Deal; hidden: boolean; onToggleHide: () => void }) {
@@ -101,6 +127,7 @@ export default function DealRow({ deal: d, hidden, onToggleHide }: { deal: Deal;
   const { offer, basis } = offerFor(d);
   const message = draftOfferMessage(d, offer);
   const flags = d.flags ?? [];
+  const quiet = maybeSold(d);
   const sub = d.sub === "watch_swap" ? "r/watch_swap" : d.source === "ebay" ? "eBay" : "r/WatchExchange";
 
   const copy = async () => {
@@ -117,7 +144,7 @@ export default function DealRow({ deal: d, hidden, onToggleHide }: { deal: Deal;
     <article
       className={`rounded-2xl border bg-card p-4 transition-colors duration-150 ${
         flags.length ? "border-[#d9a441]/40" : "border-border"
-      } ${hidden ? "opacity-50" : ""}`}
+      } ${hidden || quiet ? "opacity-60" : ""}`}
     >
       <div className="flex gap-3.5">
         <Photo url={d.imageUrl} />
@@ -136,13 +163,14 @@ export default function DealRow({ deal: d, hidden, onToggleHide }: { deal: Deal;
 
       <p className="mt-3 font-mono text-[12px] leading-relaxed text-[#c7c3b6]">
         {ageLine(d)}
-        {d.seller && (
-          <>
-            {" · "}u/{d.seller}{" "}
-            <span className="text-muted">({(d.sellerPosts ?? 0) >= 200 ? "200+" : d.sellerPosts} posts)</span>
-          </>
-        )}
+        <SellerLine d={d} />
       </p>
+
+      {quiet && (
+        <p className="mt-2.5 rounded-xl border border-border bg-background px-3 py-2 font-mono text-[11.5px] leading-relaxed text-muted">
+          Seller hasn&apos;t bumped this in {daysSincePosted(d)} days — it may have sold or been deleted. Check the post first.
+        </p>
+      )}
 
       {flags.length > 0 && (
         <ul className="mt-2.5 flex flex-col gap-1 rounded-xl border border-[#d9a441]/30 bg-[#d9a441]/[0.07] px-3 py-2">
@@ -193,7 +221,9 @@ export default function DealRow({ deal: d, hidden, onToggleHide }: { deal: Deal;
             {copied ? "Copied ✓" : "Copy offer message"}
           </button>
           <p className="font-mono text-[11px] leading-relaxed text-muted">
-            Before paying: check the scam list, confirm the post is still open, ask for a timestamp photo, and pay with PayPal Goods &amp; Services only.
+            {d.source === "ebay"
+              ? "Before buying: check the photos and item specifics (Type should be Wristwatch, size and condition), the return policy, and whether it has eBay's Authenticity Guarantee."
+              : "Before paying: check the scam list, confirm the post is still open, ask for a timestamp photo, and pay with PayPal Goods & Services only."}
           </p>
         </div>
       )}

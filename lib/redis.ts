@@ -24,10 +24,16 @@ function redis(): Redis {
 const SEEN_TTL_SECONDS = 30 * 24 * 60 * 60; // 30 days
 const DEALS_KEY = "deals:store"; // hash: field = "{source}:{id}" -> Deal JSON
 const DEALS_MAX = 200; // cap returned to the dashboard
-const PRUNE_MS = 30 * 24 * 60 * 60 * 1000; // drop deals not confirmed in 30 days
-// WatchRecon deals are re-confirmed every 12h while the post is live (or reposted),
-// so one unseen for 7 days has almost certainly sold or been pulled.
+// Scanner deals are re-confirmed every 12h while the post is live (or reposted) and
+// eBay items are re-checked every 6h, so one unseen for 7 days is gone.
 const WR_PRUNE_MS = 7 * 24 * 60 * 60 * 1000;
+// Reddit sellers bump unsold watches every few days. A flip not bumped in 5 days, or
+// anything else not bumped in 14, has almost always sold or been pulled.
+const DAY = 24 * 60 * 60 * 1000;
+function silentTooLong(d: Deal, now: number): boolean {
+  if (d.source !== "reddit" || !d.lastPostedAt) return false;
+  return now - d.lastPostedAt > (d.kind === "fresh" ? 5 : 14) * DAY;
+}
 
 function seenKey(source: string, id: string): string {
   return `seen:${source}:${id}`;
@@ -97,7 +103,8 @@ export async function removeDeals(source: string, ids: string[]): Promise<void> 
 
 /**
  * All current flagged deals, newest-first, capped. Prunes deals whose listing
- * hasn't been confirmed active in PRUNE_MS (the listing is gone from the source).
+ * hasn't been re-confirmed in a week, legacy watchlist deals, and Reddit posts the
+ * seller stopped bumping (probably sold).
  */
 export async function getDeals(): Promise<Deal[]> {
   const map = (await redis().hgetall<Record<string, string | Deal>>(DEALS_KEY)) ?? {};
@@ -108,8 +115,12 @@ export async function getDeals(): Promise<Deal[]> {
   for (const [field, value] of Object.entries(map)) {
     const deal = typeof value === "string" ? safeParse<Deal>(value) : (value as Deal);
     if (!deal) continue;
-    const pruneAfter = deal.kind ? WR_PRUNE_MS : PRUNE_MS;
-    if (deal.lastConfirmedActiveAt && now - deal.lastConfirmedActiveAt > pruneAfter) {
+    // Deals from the retired watchlist-median scorer (no `kind`) were mostly noise; drop them.
+    if (!deal.kind || silentTooLong(deal, now)) {
+      expiredFields.push(field);
+      continue;
+    }
+    if (deal.lastConfirmedActiveAt && now - deal.lastConfirmedActiveAt > WR_PRUNE_MS) {
       expiredFields.push(field);
       continue;
     }

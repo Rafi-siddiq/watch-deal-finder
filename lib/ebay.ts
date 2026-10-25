@@ -15,9 +15,14 @@ const INSIGHTS_SCOPE = "https://api.ebay.com/oauth/api_scope/buy.marketplace.ins
  *  Must include every brand present in config/watchlist.json — the scanner only
  *  fetches listings for terms in THIS list, not for whatever the watchlist scores. */
 const SEARCH_TERMS = [
-  "Omega", "Hamilton", "Frederique Constant", "MAEN", "Seiko", "Tudor",
+  "Omega", "Hamilton", "Frederique Constant", "Seiko", "Tudor",
   "Rolex", "Cartier", "IWC", "Longines", "Breitling", "Grand Seiko",
-  "Zenith", "Panerai", "Oris", "TAG Heuer", "Rado",
+  "Zenith", "Panerai", "Oris", "TAG Heuer", "Rado", "Nomos", "Sinn", "Credor",
+  // Popular microbrands
+  "MAEN", "Traska", "Kuoe", "Lorier", "Baltic watch", "Farer", "Furlan Marri",
+  "Serica", "Halios", "Nivada Grenchen", "Monta watch", "Kurono", "Studio Underd0g",
+  "Formex", "Christopher Ward", "Zodiac Sea Wolf", "Doxa", "Yema", "Beaubleu",
+  "Brew watch", "Nodus", "Unimatic",
 ];
 
 let cachedToken: { token: string; expiresAt: number } | null = null;
@@ -65,6 +70,9 @@ interface BrowseItem {
   image?: { imageUrl?: string };
   additionalImages?: { imageUrl?: string }[];
   condition?: string;
+  shippingOptions?: { shippingCost?: { value?: string } }[];
+  seller?: { username?: string; feedbackPercentage?: string; feedbackScore?: number };
+  itemLocation?: { country?: string };
 }
 
 export interface EbayFetchResult {
@@ -107,19 +115,33 @@ export async function fetchEbayListings(limitPerTerm = 25): Promise<EbayFetchRes
   const seen = new Set<string>();
   const failed: string[] = [];
 
-  for (const term of SEARCH_TERMS) {
+  // Searches run 8 at a time so ~40 brand terms fit inside a serverless time budget.
+  const searchOne = async (term: string): Promise<BrowseItem[]> => {
+    let res = await ebaySearch(term, token, limitPerTerm);
+    if (res.status === 401) {
+      // Token likely expired mid-run — refresh once and retry this search.
+      token = await getToken(BASE_SCOPE, true);
+      res = await ebaySearch(term, token, limitPerTerm);
+    }
+    if (!res.ok) {
+      throw new Error(`${res.status} ${await safeText(res)}`);
+    }
+    const json = (await res.json()) as { itemSummaries?: BrowseItem[] };
+    return json.itemSummaries ?? [];
+  };
+  const results: { term: string; items?: BrowseItem[]; error?: string }[] = [];
+  for (let i = 0; i < SEARCH_TERMS.length; i += 8) {
+    const chunk = SEARCH_TERMS.slice(i, i + 8);
+    const settled = await Promise.allSettled(chunk.map(searchOne));
+    settled.forEach((s, j) =>
+      results.push(s.status === "fulfilled" ? { term: chunk[j], items: s.value } : { term: chunk[j], error: String(s.reason?.message ?? s.reason) })
+    );
+  }
+
+  for (const { term, items, error } of results) {
     try {
-      let res = await ebaySearch(term, token, limitPerTerm);
-      if (res.status === 401) {
-        // Token likely expired mid-run — refresh once and retry this search.
-        token = await getToken(BASE_SCOPE, true);
-        res = await ebaySearch(term, token, limitPerTerm);
-      }
-      if (!res.ok) {
-        throw new Error(`${res.status} ${await safeText(res)}`);
-      }
-      const json = (await res.json()) as { itemSummaries?: BrowseItem[] };
-      for (const it of json.itemSummaries ?? []) {
+      if (error !== undefined) throw new Error(error);
+      for (const it of items ?? []) {
         if (!it.itemId || seen.has(it.itemId)) continue;
         seen.add(it.itemId);
         const priceVal = it.price?.value ? Number(it.price.value) : NaN;
@@ -144,6 +166,12 @@ export async function fetchEbayListings(limitPerTerm = 25): Promise<EbayFetchRes
             .slice(0, 3),
           // Structured condition from the Browse API (e.g. "Pre-owned", "New").
           condition: it.condition,
+          price: Number.isFinite(priceVal) ? priceVal : undefined,
+          shippingCost: shippingOf(it),
+          sellerName: it.seller?.username,
+          sellerFeedback: it.seller?.feedbackScore,
+          sellerPositivePct: it.seller?.feedbackPercentage ? Number(it.seller.feedbackPercentage) : undefined,
+          country: it.itemLocation?.country,
         });
       }
     } catch (e) {
@@ -152,6 +180,40 @@ export async function fetchEbayListings(limitPerTerm = 25): Promise<EbayFetchRes
     }
   }
   return { listings: out, failed, attempted: SEARCH_TERMS.length };
+}
+
+/** Cheapest listed shipping (0 = free); undefined when the summary doesn't say. */
+function shippingOf(it: BrowseItem): number | undefined {
+  const costs = (it.shippingOptions ?? [])
+    .map((o) => Number(o.shippingCost?.value))
+    .filter((n) => Number.isFinite(n));
+  return costs.length ? Math.min(...costs) : undefined;
+}
+
+/**
+ * Is this eBay item still for sale? Browse getItem 404s once a listing ends or
+ * sells. Returns null when the check itself failed (keep the deal, retry later).
+ */
+export async function ebayItemAvailable(itemId: string): Promise<boolean | null> {
+  try {
+    let token = await getToken();
+    const url = `https://api.ebay.com/buy/browse/v1/item/${encodeURIComponent(itemId)}?fieldgroups=COMPACT`;
+    const headers = (t: string) => ({ Authorization: `Bearer ${t}`, "X-EBAY-C-MARKETPLACE-ID": MARKETPLACE });
+    let res = await fetchWithBackoff(url, { headers: headers(token) });
+    if (res.status === 401) {
+      token = await getToken(BASE_SCOPE, true);
+      res = await fetchWithBackoff(url, { headers: headers(token) });
+    }
+    if (res.status === 404 || res.status === 410) return false;
+    if (!res.ok) return null;
+    const j = (await res.json()) as { estimatedAvailabilities?: { estimatedAvailabilityStatus?: string }[]; itemEndDate?: string };
+    const status = j.estimatedAvailabilities?.[0]?.estimatedAvailabilityStatus;
+    if (status === "OUT_OF_STOCK") return false;
+    if (j.itemEndDate && Date.parse(j.itemEndDate) < Date.now()) return false;
+    return true;
+  } catch {
+    return null;
+  }
 }
 
 /**

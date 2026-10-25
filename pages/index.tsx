@@ -2,15 +2,15 @@ import { useEffect, useMemo, useState } from "react";
 import Head from "next/head";
 import type { Deal } from "@/lib/types";
 import DealRow from "@/components/DealRow";
-import { fmtWhen } from "@/components/dealUtils";
+import { fmtWhen, maybeSold } from "@/components/dealUtils";
 
-type Tab = "flips" | "lowball" | "collection" | "ebay";
+type Tab = "flips" | "lowball" | "micro" | "collection";
 
 const TABS: { key: Tab; label: string; blurb: string }[] = [
   {
     key: "flips",
     label: "Flips",
-    blurb: "Priced under what the same watch sells for on Reddit. Fresh underpriced posts go fast, so message quickly.",
+    blurb: "Reddit and eBay watches priced under what the same reference sells for on Reddit. Fresh underpriced posts go fast, so message quickly.",
   },
   {
     key: "lowball",
@@ -18,27 +18,30 @@ const TABS: { key: Tab; label: string; blurb: string }[] = [
     blurb: "Listed 3+ weeks (reposts counted). Offer up to the amount shown and you still clear about $400 reselling.",
   },
   {
+    key: "micro",
+    label: "Micro",
+    blurb: "Popular microbrands (Traska, Kuoe, Maen, Lorier, Baltic, Farer…) priced 10%+ under similar listings, or sitting long enough to offer low and still make about $200.",
+  },
+  {
     key: "collection",
     label: "Collection",
     blurb: "Under 40mm and under your collection budget, priced 10%+ below what other sellers ask.",
   },
-  {
-    key: "ebay",
-    label: "eBay",
-    blurb: "eBay listings against the hand-set watchlist prices. Rougher comps, so verify before buying.",
-  },
 ];
 
 function tabOf(d: Deal): Tab {
-  if (d.source === "ebay") return "ebay";
   if (d.kind === "lowball") return "lowball";
+  if (d.kind === "micro") return "micro";
   if (d.kind === "collection") return "collection";
   return "flips";
 }
 
-/** Best-first: score already folds in profit / offer room / discount and caps flagged (scam-pattern) deals. */
+/**
+ * Best-first: score already folds in profit / offer room / discount and caps flagged
+ * (scam-pattern) deals; posts that have gone quiet (maybe sold) sink to the bottom.
+ */
 function rank(a: Deal, b: Deal): number {
-  return b.score - a.score || b.estimatedNetProfit - a.estimatedNetProfit;
+  return Number(maybeSold(a)) - Number(maybeSold(b)) || b.score - a.score || b.estimatedNetProfit - a.estimatedNetProfit;
 }
 
 const HIDDEN_KEY = "wdf:hidden";
@@ -79,15 +82,17 @@ export default function Dashboard() {
     try {
       const res = await fetch("/api/scan", { method: "POST" });
       const j = await res.json();
-      if (!j.ok) throw new Error(j.error || "Scan failed");
+      if (!j.ok) throw new Error(j.error || j.reddit?.error || "Scan failed");
       const next = await loadDeals();
       if (next) {
         setDeals(next);
         const added = next.filter((d) => !before.has(`${d.source}:${d.id}`)).length;
+        const removed = (j.removed?.sold ?? 0) + (j.removed?.ebayEnded ?? 0) + (j.removed?.redditGone ?? 0);
+        const checked = `Checked ${j.reddit?.fetched ?? 0} Reddit posts${j.ebay?.fetched ? ` + ${j.ebay.fetched} eBay listings` : ""}.`;
         setScanNote(
-          `Checked ${j.fetched} posts. ${added ? `${added} new deal${added === 1 ? "" : "s"}.` : "Nothing new since last check."}${
-            j.outOfTime ? " More to check — tap again." : ""
-          }`
+          `${checked} ${added ? `${added} new deal${added === 1 ? "" : "s"}.` : "Nothing new since last check."}${
+            removed ? ` Removed ${removed} sold/ended.` : ""
+          }${j.reddit?.outOfTime || j.ebay?.outOfTime ? " More to check — tap again." : ""}`
         );
       }
     } catch (e) {
@@ -155,7 +160,7 @@ export default function Dashboard() {
   );
 
   const counts = useMemo(() => {
-    const c: Record<Tab, number> = { flips: 0, lowball: 0, collection: 0, ebay: 0 };
+    const c: Record<Tab, number> = { flips: 0, lowball: 0, micro: 0, collection: 0 };
     for (const d of matches) if (!hidden.has(`${d.source}:${d.id}`)) c[tabOf(d)]++;
     return c;
   }, [matches, hidden]);
@@ -271,7 +276,8 @@ export default function Dashboard() {
 
           <p className="mt-6 font-mono text-[11px] leading-relaxed text-muted">
             For research only: nothing is bought or messaged for you. Prices compare against other sellers&apos; asks
-            on WatchRecon (Reddit, WUS and more), not sold prices.
+            on WatchRecon (Reddit, WUS and more), not sold prices. Reddit can&apos;t be checked from the site, so a
+            post may have sold or been deleted — tap Open post before messaging.
           </p>
         </main>
       </div>

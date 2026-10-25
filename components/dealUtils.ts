@@ -15,6 +15,19 @@ export function fmtWhen(ms: number): string {
   return `${Math.round(hrs / 24)}d ago`;
 }
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Days since a Reddit seller last posted/bumped this watch (undefined for eBay / older deals). */
+export function daysSincePosted(deal: Deal, now = Date.now()): number | undefined {
+  return deal.source === "reddit" && deal.lastPostedAt ? Math.floor((now - deal.lastPostedAt) / DAY_MS) : undefined;
+}
+
+/** Reddit sellers bump unsold watches every few days; a quiet post has often sold or been deleted. */
+export function maybeSold(deal: Deal, now = Date.now()): boolean {
+  const days = daysSincePosted(deal, now);
+  return days !== undefined && days >= (deal.kind === "fresh" ? 3 : 7);
+}
+
 export type AgeTier = Deal["ageTier"];
 
 export const AGE_META: Record<AgeTier, { label: string; className: string }> = {
@@ -35,8 +48,11 @@ export function suggestedOffer(price: number, ageTier: AgeTier): { pct: number; 
 /** Lowball deals carry a comp-based max offer (still nets $400); use it when it's lower. */
 export function offerFor(deal: Deal): { pct: number; offer: number; basis: string } {
   const age = suggestedOffer(deal.price, deal.ageTier);
-  if (deal.maxOffer && deal.maxOffer < age.offer) {
-    return { pct: 1 - deal.maxOffer / deal.price, offer: deal.maxOffer, basis: "max offer that still nets $400" };
+  // Only lowball-style deals carry a meaningful max offer; ignore implausibly low ones.
+  const offerKind = deal.kind === "lowball" || deal.kind === "micro";
+  if (offerKind && deal.maxOffer && deal.maxOffer >= 0.5 * deal.price && deal.maxOffer < age.offer) {
+    const target = deal.kind === "micro" ? "$200" : "$400";
+    return { pct: 1 - deal.maxOffer / deal.price, offer: deal.maxOffer, basis: `max offer that still nets ${target}` };
   }
   return { ...age, basis: `${Math.round(age.pct * 100)}% off for ${AGE_META[deal.ageTier].label.toLowerCase()} listing` };
 }
