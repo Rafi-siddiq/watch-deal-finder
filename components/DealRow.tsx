@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { Deal } from "@/lib/types";
+import type { AiReview, Deal } from "@/lib/types";
 import { fmtMoney, fmtWhen, offerFor, draftOfferMessage, maybeSold, daysSincePosted } from "@/components/dealUtils";
 
 /** Listing photo with a watch-glyph fallback (missing / broken image). */
@@ -101,6 +101,30 @@ function ageLine(d: Deal): string {
   return parts.join(" · ");
 }
 
+const VERDICT_LOOK: Record<AiReview["verdict"], { label: string; className: string }> = {
+  keep: { label: "Claude: worth a look", className: "border-[#7bbf8e]/40 bg-[#7bbf8e]/[0.07] text-[#9fd3ad]" },
+  caution: { label: "Claude: check first", className: "border-[#d9a441]/40 bg-[#d9a441]/[0.07] text-[#e6c27a]" },
+  skip: { label: "Claude: skip", className: "border-[#e0685f]/40 bg-[#e0685f]/[0.07] text-[#ec938c]" },
+};
+
+/** Claude's verdict, one-line take, and specific issues. */
+function AiBox({ ai }: { ai: AiReview }) {
+  const look = VERDICT_LOOK[ai.verdict];
+  return (
+    <div className={`mt-2.5 rounded-xl border px-3 py-2 ${look.className}`}>
+      <p className="font-mono text-[10px] uppercase tracking-[0.14em]">{look.label}</p>
+      {ai.note && <p className="mt-1 text-[13px] leading-snug text-foreground">{ai.note}</p>}
+      {ai.issues.length > 0 && (
+        <ul className="mt-1 flex flex-col gap-0.5">
+          {ai.issues.map((i) => (
+            <li key={i} className="font-mono text-[11.5px] leading-relaxed">• {i}</li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 function SellerLine({ d }: { d: Deal }) {
   if (!d.seller) return null;
   if (d.source === "ebay") {
@@ -171,6 +195,8 @@ export default function DealRow({ deal: d, hidden, onToggleHide }: { deal: Deal;
           Seller hasn&apos;t bumped this in {daysSincePosted(d)} days — it may have sold or been deleted. Check the post first.
         </p>
       )}
+
+      {d.ai && <AiBox ai={d.ai} />}
 
       {flags.length > 0 && (
         <ul className="mt-2.5 flex flex-col gap-1 rounded-xl border border-[#d9a441]/30 bg-[#d9a441]/[0.07] px-3 py-2">

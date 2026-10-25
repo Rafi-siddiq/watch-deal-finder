@@ -3,6 +3,10 @@
     {
       "path": "/api/cron/scan-deals?days=7",
       "schedule": "0 14 * * *"
+    },
+    {
+      "path": "/api/cron/review-deals",
+      "schedule": "10 14 * * *"
     }
   ]
 }

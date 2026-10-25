@@ -136,4 +136,18 @@ export interface Deal {
   shippingIncluded?: number;
   /** Item ships from (eBay country code). */
   country?: string;
+  /** Claude's second look at the deal (absent until reviewed, or when AI review is off). */
+  ai?: AiReview;
+}
+
+export interface AiReview {
+  verdict: "keep" | "caution" | "skip";
+  /** Specific problems found (wrong variant, aftermarket parts, condition, scam signals…). */
+  issues: string[];
+  /** One-line take, written for the buyer. */
+  note: string;
+  model: string;
+  reviewedAt: number;
+  /** Ask at review time; a price change triggers a fresh review. */
+  price: number;
 }

@@ -216,6 +216,55 @@ export async function ebayItemAvailable(itemId: string): Promise<boolean | null>
   }
 }
 
+export interface EbayItemDetails {
+  /** Item specifics, e.g. "Type: Wristwatch", "Case Size: 38 mm", "Movement: Automatic". */
+  aspects: string[];
+  condition?: string;
+  conditionDescription?: string;
+  returnTerms?: string;
+  authenticityGuarantee: boolean;
+  /** Seller description as plain text (HTML stripped). */
+  description: string;
+}
+
+/** Full listing details for AI review. Returns null when the item is gone or the call fails. */
+export async function ebayItemDetails(itemId: string): Promise<EbayItemDetails | null> {
+  try {
+    const token = await getToken();
+    const res = await fetchWithBackoff(`https://api.ebay.com/buy/browse/v1/item/${encodeURIComponent(itemId)}`, {
+      headers: { Authorization: `Bearer ${token}`, "X-EBAY-C-MARKETPLACE-ID": MARKETPLACE },
+    });
+    if (!res.ok) return null;
+    const j = (await res.json()) as {
+      localizedAspects?: { name?: string; value?: string }[];
+      condition?: string;
+      conditionDescription?: string;
+      description?: string;
+      shortDescription?: string;
+      returnTerms?: { returnsAccepted?: boolean; returnPeriod?: { value?: number; unit?: string } };
+      authenticityGuarantee?: unknown;
+    };
+    const text = (j.description || j.shortDescription || "")
+      .replace(/<style[\s\S]*?<\/style>|<script[\s\S]*?<\/script>/gi, " ")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/&nbsp;/g, " ")
+      .replace(/&amp;/g, "&")
+      .replace(/\s+/g, " ")
+      .trim();
+    const rt = j.returnTerms;
+    return {
+      aspects: (j.localizedAspects ?? []).filter((a) => a.name && a.value).map((a) => `${a.name}: ${a.value}`),
+      condition: j.condition,
+      conditionDescription: j.conditionDescription,
+      returnTerms: rt ? (rt.returnsAccepted ? `${rt.returnPeriod?.value ?? "?"} ${rt.returnPeriod?.unit ?? ""} returns`.trim() : "no returns") : undefined,
+      authenticityGuarantee: Boolean(j.authenticityGuarantee),
+      description: text,
+    };
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Probe whether this dev account has Marketplace Insights (sold comps) access.
  * That API is gated behind a separate application approval + OAuth scope.

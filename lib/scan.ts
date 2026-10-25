@@ -2,6 +2,7 @@ import { scanWatchRecon, scanEbay, type ScanOptions } from "./watchrecon";
 import { fetchEbayListings, ebayItemAvailable } from "./ebay";
 import { upsertDeal, removeDeals, getDeals } from "./redis";
 import { checkRedditPosts, redditApiConfigured } from "./redditApi";
+import { aiReviewConfigured, reviewDeals } from "./aiReview";
 import type { Deal } from "./types";
 
 export interface ScanSummary {
@@ -90,8 +91,12 @@ export async function runScan(days: number): Promise<ScanSummary> {
 }
 
 async function store(deals: Deal[]): Promise<number> {
+  // Keep an existing AI review when the scanner refreshes a deal at the same price.
+  const existing = new Map((await getDeals().catch(() => [] as Deal[])).map((d) => [`${d.source}:${d.id}`, d]));
   let n = 0;
-  for (const d of deals) {
+  for (const fresh of deals) {
+    const prev = existing.get(`${fresh.source}:${fresh.id}`);
+    const d = prev?.ai && prev.ai.price === fresh.price ? { ...fresh, ai: prev.ai } : fresh;
     try {
       await upsertDeal(d);
       n++;
@@ -112,7 +117,7 @@ async function dropEndedEbay(deals: Deal[], deadline: number): Promise<number> {
     if (Date.now() > deadline) break;
     const live = await ebayItemAvailable(d.id);
     if (live === false) gone.push(d.id);
-    else if (live === true) await upsertDeal({ ...d, lastConfirmedActiveAt: Date.now() });
+    else if (live === true) await upsertDeal({ ...d, lastConfirmedActiveAt: Date.now() }); // keeps d.ai
   }
   if (gone.length) await removeDeals("ebay", gone);
   return gone.length;
@@ -130,4 +135,21 @@ async function dropGoneReddit(deals: Deal[]): Promise<number> {
   const ids = gonePosts.map((p) => byPost.get(p)).filter((x): x is string => Boolean(x));
   if (ids.length) await removeDeals("reddit", ids);
   return ids.length;
+}
+
+export interface ReviewSummary {
+  enabled: boolean;
+  reviewed: number;
+  failed: number;
+  pending: number;
+  tookMs: number;
+}
+
+/** AI review of new/changed deals, within ~50s (fits a 60s function). Shared by the button and the cron. */
+export async function runReview(): Promise<ReviewSummary> {
+  const started = Date.now();
+  if (!aiReviewConfigured()) return { enabled: false, reviewed: 0, failed: 0, pending: 0, tookMs: 0 };
+  const deals = await getDeals();
+  const r = await reviewDeals(deals, started + 45_000, upsertDeal);
+  return { enabled: true, ...r, tookMs: Date.now() - started };
 }

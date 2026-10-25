@@ -83,17 +83,31 @@ export default function Dashboard() {
       const res = await fetch("/api/scan", { method: "POST" });
       const j = await res.json();
       if (!j.ok) throw new Error(j.error || j.reddit?.error || "Scan failed");
-      const next = await loadDeals();
+      let next = await loadDeals();
       if (next) {
         setDeals(next);
         const added = next.filter((d) => !before.has(`${d.source}:${d.id}`)).length;
         const removed = (j.removed?.sold ?? 0) + (j.removed?.ebayEnded ?? 0) + (j.removed?.redditGone ?? 0);
         const checked = `Checked ${j.reddit?.fetched ?? 0} Reddit posts${j.ebay?.fetched ? ` + ${j.ebay.fetched} eBay listings` : ""}.`;
-        setScanNote(
-          `${checked} ${added ? `${added} new deal${added === 1 ? "" : "s"}.` : "Nothing new since last check."}${
-            removed ? ` Removed ${removed} sold/ended.` : ""
-          }${j.reddit?.outOfTime || j.ebay?.outOfTime ? " More to check — tap again." : ""}`
-        );
+        const summary = `${checked} ${added ? `${added} new deal${added === 1 ? "" : "s"}.` : "Nothing new since last check."}${
+          removed ? ` Removed ${removed} sold/ended.` : ""
+        }${j.reddit?.outOfTime || j.ebay?.outOfTime ? " More to check — tap again." : ""}`;
+        setScanNote(summary);
+
+        // Claude reviews whatever is new or re-priced (no-op when AI review isn't set up).
+        if (next.some((d) => d.kind && (!d.ai || d.ai.price !== d.price))) {
+          setScanNote(`${summary} Claude is reviewing…`);
+          const rv = await fetch("/api/review", { method: "POST" }).then((r) => r.json()).catch(() => null);
+          if (rv?.ok && rv.enabled) {
+            next = (await loadDeals()) ?? next;
+            setDeals(next);
+            setScanNote(
+              `${summary} Claude reviewed ${rv.reviewed}${rv.pending ? ` (${rv.pending} still waiting — tap again)` : ""}.`
+            );
+          } else {
+            setScanNote(summary);
+          }
+        }
       }
     } catch (e) {
       setScanNote(`Couldn't check: ${(e as Error).message}`);
@@ -161,14 +175,18 @@ export default function Dashboard() {
 
   const counts = useMemo(() => {
     const c: Record<Tab, number> = { flips: 0, lowball: 0, micro: 0, collection: 0 };
-    for (const d of matches) if (!hidden.has(`${d.source}:${d.id}`)) c[tabOf(d)]++;
+    for (const d of matches) if (!hidden.has(`${d.source}:${d.id}`) && d.ai?.verdict !== "skip") c[tabOf(d)]++;
     return c;
   }, [matches, hidden]);
 
   const inTab = useMemo(() => matches.filter((d) => tabOf(d) === tab), [matches, tab]);
+  // Tucked away: deals you hid, and deals Claude reviewed as "skip".
+  const isTucked = (d: Deal) => hidden.has(`${d.source}:${d.id}`) || d.ai?.verdict === "skip";
   const hiddenInTab = inTab.filter((d) => hidden.has(`${d.source}:${d.id}`)).length;
+  const skippedInTab = inTab.filter((d) => d.ai?.verdict === "skip" && !hidden.has(`${d.source}:${d.id}`)).length;
   const rows = useMemo(
-    () => inTab.filter((d) => showHidden || !hidden.has(`${d.source}:${d.id}`)).sort(rank),
+    () => inTab.filter((d) => showHidden || !isTucked(d)).sort(rank),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [inTab, hidden, showHidden]
   );
 
@@ -265,12 +283,14 @@ export default function Dashboard() {
             </div>
           )}
 
-          {!loading && !error && hiddenInTab > 0 && (
+          {!loading && !error && hiddenInTab + skippedInTab > 0 && (
             <button
               onClick={() => setShowHidden((v) => !v)}
               className="mt-5 w-full rounded-xl border border-border py-2.5 font-mono text-[12px] text-muted transition-colors duration-150 hover:bg-brand/10 hover:text-foreground"
             >
-              {showHidden ? "Hide the ones you hid" : `Show ${hiddenInTab} hidden`}
+              {showHidden
+                ? "Tuck them away again"
+                : `Show ${[hiddenInTab && `${hiddenInTab} you hid`, skippedInTab && `${skippedInTab} Claude skipped`].filter(Boolean).join(" + ")}`}
             </button>
           )}
 
