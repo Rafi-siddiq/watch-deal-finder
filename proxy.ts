@@ -3,7 +3,8 @@ import type { NextRequest } from "next/server";
 import { AUTH_COOKIE, pinToken, safeEqual } from "@/lib/auth";
 
 /**
- * PIN gate. Protects the dashboard page ("/") and the deals API ("/api/deals").
+ * PIN gate. Protects the dashboard page ("/"), the deals API ("/api/deals") and
+ * the on-demand scan ("/api/scan").
  * Everything else — /login, /api/login, /api/cron/*, static assets — is public
  * (see the matcher below). The cron endpoint has its own optional CRON_SECRET.
  */
@@ -27,5 +28,5 @@ export async function proxy(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/", "/api/deals"],
+  matcher: ["/", "/api/deals", "/api/scan"],
 };

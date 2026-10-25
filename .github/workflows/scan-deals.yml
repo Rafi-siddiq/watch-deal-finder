@@ -1,5 +1,6 @@
-# Runs the deal scan every 15 minutes (Vercel's free plan only allows a daily cron).
-# Repo secrets needed: APP_URL (e.g. https://your-app.vercel.app) and CRON_SECRET (same value as on Vercel).
+# Optional: runs the deal scan every 15 minutes (Vercel's free plan only allows a daily cron).
+# Turn it on by adding repo secrets APP_URL (e.g. https://your-app.vercel.app) and CRON_SECRET
+# (same value as on Vercel). Without them it skips quietly; the dashboard's "Check now" works regardless.
 name: scan-deals
 
 on:
@@ -13,7 +14,12 @@ jobs:
     timeout-minutes: 6
     steps:
       - name: Trigger scan
+        env:
+          APP_URL: ${{ secrets.APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: |
-          curl -sS --fail-with-body -m 300 \
-            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
-            "${{ secrets.APP_URL }}/api/cron/scan-deals"
+          if [ -z "$APP_URL" ] || [ -z "$CRON_SECRET" ]; then
+            echo "APP_URL / CRON_SECRET not set; skipping."
+            exit 0
+          fi
+          curl -sS --fail-with-body -m 300 -H "Authorization: Bearer $CRON_SECRET" "$APP_URL/api/cron/scan-deals"

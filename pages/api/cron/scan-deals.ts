@@ -1,9 +1,9 @@
 import type { NextApiRequest, NextApiResponse } from "next";
-import { scanWatchRecon, pushDeal } from "@/lib/watchrecon";
+import { runRedditScan, maxPurchasePriceFromEnv } from "@/lib/redditScan";
 import { fetchEbayListings, checkMarketplaceInsights } from "@/lib/ebay";
 import { evaluate } from "@/lib/scoring";
 import { watchlist } from "@/lib/watchlist";
-import { trackListing, upsertDeal, removeDeals } from "@/lib/redis";
+import { trackListing, upsertDeal } from "@/lib/redis";
 import type { RawListing } from "@/lib/types";
 
 interface SourceResult {
@@ -53,9 +53,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   // Available capital right now. Unset/blank/invalid => no constraint (Infinity),
   // so every deal reads within budget. Kept in env (not the public watchlist).
-  const rawBudget = process.env.MAX_PURCHASE_PRICE;
-  const maxPurchasePrice =
-    rawBudget && Number.isFinite(Number(rawBudget)) ? Number(rawBudget) : Infinity;
+  const maxPurchasePrice = maxPurchasePriceFromEnv();
 
   // --- r/Watchexchange + r/watch_swap via WatchRecon ---
   // Reddit blocks unauthenticated datacenter requests, so Reddit posts come from
@@ -63,37 +61,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // ?days=N widens the look-back (e.g. a daily deep sweep); default 2.
   let wrStored = 0;
   let wrPushed = 0;
-  const days = clampDays(req.query.days);
   try {
-    const wr = await scanWatchRecon({
-      days,
-      minNet: Number(process.env.MIN_NET_PROFIT) || 300,
-      // Leaves headroom inside a 60s function limit (plans without longer limits) for
-      // eBay + saves; unfinished posts are picked up by the next run.
-      budgetMs: 35_000,
-      maxPrice: maxPurchasePrice,
-      collectionMax: Number(process.env.COLLECTION_MAX_PRICE) || 2000,
-    });
-    try {
-      await removeDeals("reddit", wr.soldIds);
-    } catch (e) {
-      console.error("[scan-deals] removing sold deals failed:", (e as Error).message);
-    }
-    for (const deal of wr.deals) {
-      try {
-        await upsertDeal(deal);
-        wrStored++;
-      } catch (e) {
-        console.error("[scan-deals] upsert failed for", deal.id, (e as Error).message);
-      }
-    }
-    for (const deal of wr.newDeals) {
-      try {
-        if (await pushDeal(deal)) wrPushed++;
-      } catch (e) {
-        console.error("[scan-deals] push failed for", deal.id, (e as Error).message);
-      }
-    }
+    const wr = await runRedditScan(clampDays(req.query.days), maxPurchasePrice);
+    wrStored = wr.stored;
+    wrPushed = wr.pushed;
     sources.push({ source: "watchrecon", ok: true, fetched: wr.fetched, evaluated: wr.evaluated, outOfTime: wr.outOfTime });
   } catch (e) {
     const msg = (e as Error).message;

@@ -60,18 +60,51 @@ export default function Dashboard() {
   const [search, setSearch] = useState("");
   const [hidden, setHidden] = useState<Set<string>>(new Set());
   const [showHidden, setShowHidden] = useState(false);
+  const [scanning, setScanning] = useState(false);
+  const [scanNote, setScanNote] = useState("");
+
+  async function loadDeals(): Promise<Deal[] | null> {
+    const res = await fetch("/api/deals");
+    const j = await res.json();
+    if (!j.ok) throw new Error(j.error || "Failed to load deals");
+    return j.deals as Deal[];
+  }
+
+  /** Runs a fresh Reddit scan on the server, then reloads the list. */
+  async function checkNow() {
+    if (scanning) return;
+    setScanning(true);
+    setScanNote("Checking Reddit… (can take up to a minute)");
+    const before = new Set(deals.map((d) => `${d.source}:${d.id}`));
+    try {
+      const res = await fetch("/api/scan", { method: "POST" });
+      const j = await res.json();
+      if (!j.ok) throw new Error(j.error || "Scan failed");
+      const next = await loadDeals();
+      if (next) {
+        setDeals(next);
+        const added = next.filter((d) => !before.has(`${d.source}:${d.id}`)).length;
+        setScanNote(
+          `Checked ${j.fetched} posts. ${added ? `${added} new deal${added === 1 ? "" : "s"}.` : "Nothing new since last check."}${
+            j.outOfTime ? " More to check — tap again." : ""
+          }`
+        );
+      }
+    } catch (e) {
+      setScanNote(`Couldn't check: ${(e as Error).message}`);
+    } finally {
+      setScanning(false);
+    }
+  }
 
   useEffect(() => {
     let active = true;
     (async () => {
       try {
-        const res = await fetch("/api/deals");
-        const j = await res.json();
-        if (!active) return;
-        if (j.ok) setDeals(j.deals as Deal[]);
-        else setError(j.error || "Failed to load deals");
-      } catch {
-        if (active) setError("Network error");
+        const next = await loadDeals();
+        if (active && next) setDeals(next);
+      } catch (e) {
+        if (active) setError((e as Error).message || "Network error");
       } finally {
         if (active) {
           // Per-device conveniences: remembered tab + hidden deals (read client-side only).
@@ -171,14 +204,22 @@ export default function Dashboard() {
               ))}
             </nav>
 
-            <div className="py-3">
+            <div className="flex gap-2 py-3">
               <input
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search watch, reference or seller…"
-                className="w-full rounded-xl border border-border bg-card px-4 py-2.5 font-mono text-[13px] text-foreground outline-none placeholder:text-muted focus:border-brand"
+                placeholder="Search watch, ref or seller…"
+                className="min-w-0 flex-1 rounded-xl border border-border bg-card px-4 py-2.5 font-mono text-[13px] text-foreground outline-none placeholder:text-muted focus:border-brand"
               />
+              <button
+                onClick={checkNow}
+                disabled={scanning}
+                className="flex-shrink-0 rounded-xl border border-brand/50 px-3.5 py-2.5 font-mono text-[12px] text-brand transition-colors duration-150 hover:bg-brand/10 disabled:opacity-60"
+              >
+                {scanning ? "Checking…" : "↻ Check now"}
+              </button>
             </div>
+            {scanNote && <p className="-mt-1 pb-3 font-mono text-[11px] text-muted">{scanNote}</p>}
           </div>
         </header>
 
@@ -203,7 +244,7 @@ export default function Dashboard() {
               note={
                 q
                   ? "Try a brand, a reference number, or a seller's username."
-                  : "The scanner checks every 15 minutes, and new deals show up here (and on your phone) as they're found."
+                  : "Tap “Check now” to pull the latest posts. The site also checks on its own once a day."
               }
             />
           ) : (
