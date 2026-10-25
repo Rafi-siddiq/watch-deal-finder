@@ -150,4 +150,6 @@ export interface AiReview {
   reviewedAt: number;
   /** Ask at review time; a price change triggers a fresh review. */
   price: number;
+  /** Review-instructions version; a newer version triggers a fresh review. */
+  v?: number;
 }

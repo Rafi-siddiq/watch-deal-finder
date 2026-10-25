@@ -72,12 +72,23 @@ Check for:
 - Resale reality: will this actually resell at the comp on Reddit? Hard-to-sell sizes (under 34mm or over 44mm for men), unpopular colors, odd references.
 - For collection picks: case size must be under 40mm; never suggest another PRX.
 
-Verdicts:
-- keep: looks like a genuine deal worth messaging about.
-- caution: possibly good, but something must be confirmed first (say exactly what to ask or check).
-- skip: not a real deal (wrong comp, parts/aftermarket, rough condition, likely scam, or won't resell).
+How to judge each deal type:
+- fresh (flip): is the asking price really below what this exact watch resells for?
+- lowball (flip): has it sat long enough that the max offer shown is a realistic counteroffer?
+- micro: is it a fair-to-good price for this microbrand, for the buyer's collection or a small flip?
+- collection: a personal buy, not a flip. Is it a fair or good price for a nice watch under 40mm? Ignore resale profit.
 
-Be specific and brief. "issues" lists concrete problems (empty if none). "note" is one sentence the buyer can act on, e.g. "Comp mixes the 41mm; this 36mm midsize sells nearer $1,800, so the profit is thin." Judge only from the data given; when something can't be known from it, say what to check rather than guessing.`;
+The buyer always does the standard checks on every purchase: timestamped photos, box and papers, serial, the seller's trade history, PayPal Goods & Services. Never list these or tell the buyer to "ask for photos". Mention only something specific to this listing.
+
+Verdicts:
+- keep: nothing specific is wrong. This is the default; a listing with no red flag is a keep.
+- caution: one specific doubt that a single question or check would settle. Name it, e.g. "Title doesn't say quartz or automatic; the comp is automatic."
+- skip: a specific reason it isn't a deal: wrong-variant comp, parts or aftermarket, rough condition, likely scam, priced at or above market, or won't resell.
+
+"issues" lists only listing-specific problems (empty for a clean keep). "note" is one plain sentence of at most 25 words the buyer can act on, e.g. "Comp mixes the 41mm; this 36mm midsize sells nearer $1,800, so the profit is thin." Judge only from the data given and don't invent problems.`;
+
+/** Bump when the review instructions change so existing reviews are redone. */
+const PROMPT_VERSION = 2;
 
 const VERDICT_SCHEMA = {
   type: "object",
@@ -104,7 +115,11 @@ async function brief(d: Deal): Promise<string> {
     `Title: ${d.title}`,
     `Asking: $${d.price}${d.source === "ebay" && d.shippingIncluded !== undefined ? ` (includes $${d.shippingIncluded} shipping)` : ""}`,
     `Comparison: ~$${d.median} — ${d.compBasis ?? "unknown basis"}`,
-    d.kind === "lowball" || d.kind === "micro" ? `Max offer that still hits the profit target: $${d.maxOffer}` : `Estimated profit at asking: $${d.estimatedNetProfit}`,
+    d.kind === "lowball" || (d.kind === "micro" && (d.maxOffer ?? 0) >= 0.5 * d.price)
+      ? `Max offer that still hits the profit target: $${d.maxOffer}`
+      : d.kind === "collection" || d.kind === "micro"
+        ? `Priced ${Math.round(d.discount * 100)}% below the comparison`
+        : `Estimated flip profit at asking: $${d.estimatedNetProfit}`,
     `Listed: ${d.daysListed} days${d.reposts ? `, reposted ${d.reposts}x` : ""}${d.firstPrice && d.firstPrice > d.price ? `, first asked $${d.firstPrice}` : ""}`,
   ];
   if (d.caseMm) lines.push(`Case size (from title): ${d.caseMm}mm`);
@@ -149,15 +164,15 @@ export async function reviewDeal(d: Deal): Promise<AiReview | null> {
   try {
     const v = JSON.parse(text) as Pick<AiReview, "verdict" | "issues" | "note">;
     if (!["keep", "caution", "skip"].includes(v.verdict)) return null;
-    return { verdict: v.verdict, issues: v.issues ?? [], note: v.note ?? "", model: response.model, reviewedAt: Date.now(), price: d.price };
+    return { verdict: v.verdict, issues: v.issues ?? [], note: v.note ?? "", model: response.model, reviewedAt: Date.now(), price: d.price, v: PROMPT_VERSION };
   } catch {
     return null;
   }
 }
 
-/** Deals that have never been reviewed, or whose price changed since. */
+/** Deals never reviewed, re-priced since, or reviewed under older instructions. */
 export function needsReview(d: Deal): boolean {
-  return Boolean(d.kind) && (!d.ai || d.ai.price !== d.price);
+  return Boolean(d.kind) && (!d.ai || d.ai.price !== d.price || d.ai.v !== PROMPT_VERSION);
 }
 
 /**
