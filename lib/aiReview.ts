@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { Redis } from "@upstash/redis";
 import { ebayItemDetails } from "./ebay";
 import type { AiReview, Deal } from "./types";
 
@@ -7,14 +8,53 @@ import type { AiReview, Deal } from "./types";
  * can't make: wrong variant vs the comp (quartz vs automatic, midsize vs full size,
  * vermeil vs steel), aftermarket/redial parts, rough or incomplete pieces,
  * accessories, scam patterns, and for eBay the item specifics and description.
- * Off unless ANTHROPIC_API_KEY is set. AI_MODEL overrides the model.
+ * Off unless ANTHROPIC_API_KEY is set. AI_MODEL overrides the model; spend is
+ * capped per calendar month at AI_MONTHLY_BUDGET dollars (default $2).
  */
 
 export function aiReviewConfigured(): boolean {
   return Boolean(process.env.ANTHROPIC_API_KEY);
 }
 
-const DEFAULT_MODEL = "claude-opus-5-5";
+// Haiku: a yes/no deal check costs a fraction of a cent, keeping a month of reviews around $1-2.
+const DEFAULT_MODEL = "claude-haiku-5-5";
+const DEFAULT_MONTHLY_BUDGET = 2;
+/** $ per million tokens: [input, output]. Cache writes bill at 1.25x input, cache reads at 0.1x. */
+const PRICES: Record<string, [number, number]> = {
+  "claude-haiku-5-5": [0.1, 0.5],
+  "claude-sonnet-5-5": [2, 10],
+  "claude-opus-5-5": [4, 20],
+};
+
+let _redis: Redis | null = null;
+function redis(): Redis {
+  if (!_redis) _redis = new Redis({ url: process.env.UPSTASH_REDIS_REST_URL!, token: process.env.UPSTASH_REDIS_REST_TOKEN! });
+  return _redis;
+}
+const spendKey = () => `ai:spend:${new Date().toISOString().slice(0, 7)}`;
+
+export function monthlyBudget(): number {
+  const n = Number(process.env.AI_MONTHLY_BUDGET);
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_MONTHLY_BUDGET;
+}
+
+/** Dollars spent on reviews this calendar month (UTC). */
+export async function spentThisMonth(): Promise<number> {
+  return Number((await redis().get<number | string>(spendKey())) ?? 0);
+}
+
+async function recordSpend(model: string, usage: Anthropic.Beta.BetaUsage): Promise<void> {
+  // Unknown models are priced as Opus so the cap errs on the safe side.
+  const [inP, outP] = PRICES[model] ?? PRICES["claude-opus-5-5"];
+  const dollars =
+    ((usage.input_tokens ?? 0) * inP +
+      (usage.cache_creation_input_tokens ?? 0) * inP * 1.25 +
+      (usage.cache_read_input_tokens ?? 0) * inP * 0.1 +
+      (usage.output_tokens ?? 0) * outP) /
+    1_000_000;
+  await redis().incrbyfloat(spendKey(), dollars);
+  await redis().expire(spendKey(), 40 * 24 * 3600);
+}
 /** Models that accept the server-side `fallbacks: "default"` refusal fallback. */
 const FALLBACK_MODELS = new Set(["claude-opus-5-5", "claude-opus-5", "claude-fable-5-1", "claude-sonnet-5-5"]);
 /** eBay descriptions can be very long HTML; past this the model is told the text was cut. */
@@ -103,6 +143,7 @@ export async function reviewDeal(d: Deal): Promise<AiReview | null> {
     system: [{ type: "text", text: SYSTEM, cache_control: { type: "ephemeral" } }],
     messages: [{ role: "user", content }],
   });
+  await recordSpend(model, response.usage);
   if (response.stop_reason === "refusal") return null;
   const text = response.content.map((b) => (b.type === "text" ? b.text : "")).join("");
   try {
@@ -120,14 +161,20 @@ export function needsReview(d: Deal): boolean {
 }
 
 /**
- * Review pending deals 4 at a time until the deadline. Best deals first, so a
- * short time budget spends its calls where they matter.
+ * Review pending deals 4 at a time until the deadline or the monthly budget runs
+ * out. Best deals first, so a short time budget spends its calls where they matter.
  */
-export async function reviewDeals(deals: Deal[], deadline: number, onReviewed: (d: Deal) => Promise<void>): Promise<{ reviewed: number; failed: number; pending: number }> {
+export async function reviewDeals(
+  deals: Deal[],
+  deadline: number,
+  onReviewed: (d: Deal) => Promise<void>
+): Promise<{ reviewed: number; failed: number; pending: number; spent: number; budget: number; overBudget: boolean }> {
   const queue = deals.filter(needsReview).sort((a, b) => b.score - a.score);
+  const budget = monthlyBudget();
   let reviewed = 0;
   let failed = 0;
-  while (queue.length && Date.now() < deadline) {
+  let spent = await spentThisMonth();
+  while (queue.length && Date.now() < deadline && spent < budget) {
     const batch = queue.splice(0, 4);
     const results = await Promise.allSettled(batch.map(reviewDeal));
     for (let i = 0; i < batch.length; i++) {
@@ -140,6 +187,7 @@ export async function reviewDeals(deals: Deal[], deadline: number, onReviewed: (
         if (r.status === "rejected") console.error("[ai-review] failed for", batch[i].id, String(r.reason?.message ?? r.reason));
       }
     }
+    spent = await spentThisMonth();
   }
-  return { reviewed, failed, pending: queue.length };
+  return { reviewed, failed, pending: queue.length, spent: Math.round(spent * 10000) / 10000, budget, overBudget: spent >= budget };
 }

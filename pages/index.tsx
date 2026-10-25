@@ -102,7 +102,9 @@ export default function Dashboard() {
             next = (await loadDeals()) ?? next;
             setDeals(next);
             setScanNote(
-              `${summary} Claude reviewed ${rv.reviewed}${rv.pending ? ` (${rv.pending} still waiting — tap again)` : ""}.`
+              rv.overBudget
+                ? `${summary} Claude reviewed ${rv.reviewed}; this month's $${rv.budget} AI budget is used up, so reviews resume next month.`
+                : `${summary} Claude reviewed ${rv.reviewed}${rv.pending ? ` (${rv.pending} still waiting — tap again)` : ""}. AI spend this month: $${rv.spent.toFixed(2)} of $${rv.budget}.`
             );
           } else {
             setScanNote(summary);

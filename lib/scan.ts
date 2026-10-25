@@ -142,13 +142,17 @@ export interface ReviewSummary {
   reviewed: number;
   failed: number;
   pending: number;
+  /** Dollars spent this month, the cap, and whether reviews paused for the month. */
+  spent: number;
+  budget: number;
+  overBudget: boolean;
   tookMs: number;
 }
 
 /** AI review of new/changed deals, within ~50s (fits a 60s function). Shared by the button and the cron. */
 export async function runReview(): Promise<ReviewSummary> {
   const started = Date.now();
-  if (!aiReviewConfigured()) return { enabled: false, reviewed: 0, failed: 0, pending: 0, tookMs: 0 };
+  if (!aiReviewConfigured()) return { enabled: false, reviewed: 0, failed: 0, pending: 0, spent: 0, budget: 0, overBudget: false, tookMs: 0 };
   const deals = await getDeals();
   const r = await reviewDeals(deals, started + 45_000, upsertDeal);
   return { enabled: true, ...r, tookMs: Date.now() - started };
