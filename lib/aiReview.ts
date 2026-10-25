@@ -80,26 +80,45 @@ How to judge each deal type:
 
 The buyer always does the standard checks on every purchase: timestamped photos, box and papers, serial, the seller's trade history, PayPal Goods & Services. Never list these or tell the buyer to "ask for photos". Mention only something specific to this listing.
 
-Verdicts:
-- keep: nothing specific is wrong. This is the default; a listing with no red flag is a keep.
-- caution: one specific doubt that a single question or check would settle. Name it, e.g. "Title doesn't say quartz or automatic; the comp is automatic."
-- skip: a specific reason it isn't a deal: wrong-variant comp, parts or aftermarket, rough condition, likely scam, priced at or above market, or won't resell.
+Report red flags, not doubts. A red flag is something the data positively shows, from this list:
+- wrong_variant: the data shows this watch differs from what the comparison prices (e.g. 18K gold vs a steel comp, a 36mm midsize vs 41mm, quartz in the title vs an automatic comp, a limited edition vs the regular model).
+- parts_or_aftermarket: aftermarket/redial/service dial or hands, franken, homage, replica, or not a complete watch.
+- rough_condition: stated damage, heavy wear, untested, needs service, or tired unserviced vintage.
+- scam_pattern: priced 40%+ under market together with a new or thin-history seller, or other classic scam signs in the data.
+- overpriced: asking at or above the comparison for a flip, or a lowball whose max offer is far below what the seller has held out for.
+- hard_to_resell: a size, style, or reference that the data suggests few buyers want.
+Missing information is NOT a red flag: no post text, unknown trade count, or an unconfirmed variant with nothing pointing to a mismatch. A listing with no red flags is a good lead, so return an empty list.
 
-"issues" lists only listing-specific problems (empty for a clean keep). "note" is one plain sentence of at most 25 words the buyer can act on, e.g. "Comp mixes the 41mm; this 36mm midsize sells nearer $1,800, so the profit is thin." Judge only from the data given and don't invent problems.`;
+"note" is one plain sentence of at most 25 words the buyer can act on, e.g. "Comp mixes the 41mm; this 36mm midsize sells nearer $1,800, so the profit is thin." For a clean listing, say briefly why it's a good lead.`;
 
 /** Bump when the review instructions change so existing reviews are redone. */
-const PROMPT_VERSION = 2;
+const PROMPT_VERSION = 3;
+
+const FLAG_TYPES = ["wrong_variant", "parts_or_aftermarket", "rough_condition", "scam_pattern", "overpriced", "hard_to_resell"] as const;
+type FlagType = (typeof FLAG_TYPES)[number];
+/** Flags that rule a deal out; the rest mean "check this one thing first". */
+const SKIP_FLAGS = new Set<FlagType>(["parts_or_aftermarket", "scam_pattern", "overpriced"]);
 
 const VERDICT_SCHEMA = {
   type: "object",
   properties: {
-    verdict: { type: "string", enum: ["keep", "caution", "skip"] },
-    issues: { type: "array", items: { type: "string" } },
+    red_flags: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          type: { type: "string", enum: [...FLAG_TYPES] },
+          detail: { type: "string" },
+        },
+        required: ["type", "detail"],
+        additionalProperties: false,
+      },
+    },
     note: { type: "string" },
   },
-  required: ["verdict", "issues", "note"],
+  required: ["red_flags", "note"],
   additionalProperties: false,
-} as const;
+};
 
 let _client: Anthropic | null = null;
 function client(): Anthropic {
@@ -154,7 +173,7 @@ export async function reviewDeal(d: Deal): Promise<AiReview | null> {
     model,
     max_tokens: 4000,
     ...(FALLBACK_MODELS.has(model) ? { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" as const } : {}),
-    output_config: { effort: "low", format: { type: "json_schema", schema: VERDICT_SCHEMA } },
+    output_config: { effort: "medium", format: { type: "json_schema", schema: VERDICT_SCHEMA } },
     system: [{ type: "text", text: SYSTEM, cache_control: { type: "ephemeral" } }],
     messages: [{ role: "user", content }],
   });
@@ -162,9 +181,19 @@ export async function reviewDeal(d: Deal): Promise<AiReview | null> {
   if (response.stop_reason === "refusal") return null;
   const text = response.content.map((b) => (b.type === "text" ? b.text : "")).join("");
   try {
-    const v = JSON.parse(text) as Pick<AiReview, "verdict" | "issues" | "note">;
-    if (!["keep", "caution", "skip"].includes(v.verdict)) return null;
-    return { verdict: v.verdict, issues: v.issues ?? [], note: v.note ?? "", model: response.model, reviewedAt: Date.now(), price: d.price, v: PROMPT_VERSION };
+    const out = JSON.parse(text) as { red_flags?: { type: FlagType; detail: string }[]; note?: string };
+    const flags = (out.red_flags ?? []).filter((f) => FLAG_TYPES.includes(f.type));
+    // The verdict follows from the flags, so "not enough info" can't turn every deal into a maybe.
+    const verdict: AiReview["verdict"] = flags.some((f) => SKIP_FLAGS.has(f.type)) ? "skip" : flags.length ? "caution" : "keep";
+    return {
+      verdict,
+      issues: flags.map((f) => f.detail),
+      note: out.note ?? "",
+      model: response.model,
+      reviewedAt: Date.now(),
+      price: d.price,
+      v: PROMPT_VERSION,
+    };
   } catch {
     return null;
   }
