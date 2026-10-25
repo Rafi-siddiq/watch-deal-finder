@@ -3,7 +3,7 @@ import { scanWatchRecon, pushDeal } from "@/lib/watchrecon";
 import { fetchEbayListings, checkMarketplaceInsights } from "@/lib/ebay";
 import { evaluate } from "@/lib/scoring";
 import { watchlist } from "@/lib/watchlist";
-import { trackListing, upsertDeal } from "@/lib/redis";
+import { trackListing, upsertDeal, removeDeals } from "@/lib/redis";
 import type { RawListing } from "@/lib/types";
 
 interface SourceResult {
@@ -51,6 +51,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const sources: SourceResult[] = [];
   const allListings: RawListing[] = [];
 
+  // Available capital right now. Unset/blank/invalid => no constraint (Infinity),
+  // so every deal reads within budget. Kept in env (not the public watchlist).
+  const rawBudget = process.env.MAX_PURCHASE_PRICE;
+  const maxPurchasePrice =
+    rawBudget && Number.isFinite(Number(rawBudget)) ? Number(rawBudget) : Infinity;
+
   // --- r/Watchexchange + r/watch_swap via WatchRecon ---
   // Reddit blocks unauthenticated datacenter requests, so Reddit posts come from
   // the WatchRecon mirror, scored against live comps (not watchlist medians).
@@ -62,8 +68,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const wr = await scanWatchRecon({
       days,
       minNet: Number(process.env.MIN_NET_PROFIT) || 300,
-      budgetMs: 240_000,
+      // Leaves headroom inside a 60s function limit (plans without longer limits) for
+      // eBay + saves; unfinished posts are picked up by the next run.
+      budgetMs: 35_000,
+      maxPrice: maxPurchasePrice,
     });
+    try {
+      await removeDeals("reddit", wr.soldIds);
+    } catch (e) {
+      console.error("[scan-deals] removing sold deals failed:", (e as Error).message);
+    }
     for (const deal of wr.deals) {
       try {
         await upsertDeal(deal);
@@ -74,8 +88,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
     for (const deal of wr.newDeals) {
       try {
-        await pushDeal(deal);
-        wrPushed++;
+        if (await pushDeal(deal)) wrPushed++;
       } catch (e) {
         console.error("[scan-deals] push failed for", deal.id, (e as Error).message);
       }
@@ -132,11 +145,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // timestamp (createdAt) — the cron does NOT overwrite them with bot time. We
   // still track first/last-seen as an observation record, and only count a deal
   // as "stored" after a successful Redis write so the response can't overclaim.
-  // Available capital right now. Unset/blank/invalid => no constraint (Infinity),
-  // so every deal reads within budget. Kept in env (not the public watchlist).
-  const rawBudget = process.env.MAX_PURCHASE_PRICE;
-  const maxPurchasePrice =
-    rawBudget && Number.isFinite(Number(rawBudget)) ? Number(rawBudget) : Infinity;
 
   let matched = 0;
   let stored = 0;

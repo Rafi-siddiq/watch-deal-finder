@@ -173,7 +173,7 @@ export default function DealModal({ deal: d, visible, onClose }: { deal: Deal; v
               label="Seller"
               value={
                 <a href={d.uslUrl} target="_blank" rel="noopener noreferrer" className="text-brand underline-offset-2 hover:underline">
-                  u/{d.seller} · {(d.sellerPosts ?? 0) >= 50 ? "50+" : d.sellerPosts} posts · scam list ↗
+                  u/{d.seller} · {(d.sellerPosts ?? 0) >= 200 ? "200+" : d.sellerPosts} posts · scam list ↗
                 </a>
               }
             />

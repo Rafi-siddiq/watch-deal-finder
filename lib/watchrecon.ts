@@ -28,7 +28,9 @@ const LOWBALL_MIN_OFFER_RATIO = 0.6;
 /** Asks this far under comps on a fresh post are the classic scam pattern. */
 const SCAM_RATIO = 0.6;
 
-const NOT_WATCH = /strap|bracelet only|\bband\b|end ?links?|\blinks?\b|clasp|buckle|box only|bezel insert|dial only|parts|lot of|wtb|movement only|aftermarket|a-m dial|redial|homage/i;
+// Accessory-only / parts / non-sale posts. A title that merely mentions "extra links" or a
+// strap that comes with the watch is fine; one that starts with the accessory is not.
+const NOT_WATCH = /^\W*(?:\[[^\]]*\]\s*)*(?:oem\s+|original\s+|genuine\s+)?(?:strap|bracelet|band|end ?links?|clasp|buckle|deployant|bezel insert)\b|\b(?:strap|bracelet|band|box|dial|movement|parts|links?) only\b|\b(?:straps?|bracelets?|bands?)\s+(?:for|fits?)\b|\b(?:strap|bracelet|band)\s*[-–]?\s*\d{2}\s?mm\b|\bbader\b|strapcode|\bbx\d{3}\b|\bfor parts\b|\blot of\b|\bwtb\b|aftermarket|a-m dial|redial|homage/i;
 const ACCOUNT_BLOCKLIST = /^(Motor-Special6097|Consistent-Sir629|Evening-Quit-6836|Rosspring|Kwinka000|Local_Abrocoma_749|otf_santos|Legitimate_Box_7803|StatisticianDry2101|deFischer94|Holden-DHLuxuryTime)$/i;
 
 /** Fallback resale for popular models usually listed without a reference (r/WE asks, Oct 2026). */
@@ -52,6 +54,8 @@ export interface WrListing {
   when: string;
   sold: boolean;
   sub: "Watchexchange" | "watch_swap";
+  brand: string;
+  imageUrl?: string;
 }
 
 // --- Redis (same Upstash creds as lib/redis.ts) ---
@@ -94,11 +98,15 @@ export function parse(html: string): WrListing[] {
       const user = decodeURIComponent((b.match(/user_name=([^&"]+)/) || [])[1] || "");
       const when = ((b.match(/class="postDateInfo">([^<]*)/) || [])[1] || "").trim();
       const m = url.match(/reddit\.com\/r\/(watchexchange|watch_swap)\/comments\/([a-z0-9]+)/i);
+      const brandSlug = decodeURIComponent((b.match(/[?&]brand=([^&"]+)/) || [])[1] || "");
+      const img = unesc((b.match(/<img[^>]+src="(image\.php[^"]+)"/) || [])[1] || "");
       return {
         postId: m ? m[2] : "",
         sub: (m && m[1].toLowerCase() === "watch_swap" ? "watch_swap" : "Watchexchange") as WrListing["sub"],
         title, price, url, user, when,
         sold: /\(Sold\)/i.test(b),
+        brand: brandSlug.replace(/(^|[\s-])\w/g, (c) => c.toUpperCase()),
+        imageUrl: img ? BASE + img : undefined,
       };
     })
     .filter((x) => x.title && x.postId);
@@ -170,7 +178,7 @@ export interface SellerHistory {
   firstPrice: number;
   /** Earliest post of anything by this seller — a rough account-age signal. */
   sellerSince: number;
-  /** Capped at 50 (one WatchRecon page); 50 means "50+". */
+  /** Capped at 200 (four WatchRecon pages); 200 means "200+". */
   totalPosts: number;
   soldBefore: boolean;
 }
@@ -181,7 +189,14 @@ async function historyFor(l: WrListing): Promise<SellerHistory> {
   const cached = await redis().get<SellerHistory>(key);
   if (cached) return cached;
 
-  const items = await get({ user_name: l.user, last_days: 0, include_duplicate: 1 });
+  // Busy dealers have hundreds of posts; page back far enough to find this watch's first post.
+  const items: WrListing[] = [];
+  for (let p = 1; p <= 4; p++) {
+    const page = await get({ user_name: l.user, last_days: 0, include_duplicate: 1, current_page: p });
+    items.push(...page);
+    if (page.length < 50) break;
+    await sleep(400);
+  }
   const now = Date.now();
   const ref = refOf(l.title);
   const tk = titleKey(l.title);
@@ -210,6 +225,8 @@ export interface ScanOptions {
   minNet: number;
   /** Stop starting new work after this many ms (serverless time budget). */
   budgetMs: number;
+  /** MAX_PURCHASE_PRICE; Infinity = no budget. Over-budget deals are flagged, not dropped. */
+  maxPrice: number;
 }
 
 export interface ScanResult {
@@ -218,6 +235,8 @@ export interface ScanResult {
   deals: Deal[];
   /** Deals not previously stored — the ones worth a push alert. */
   newDeals: Deal[];
+  /** Deal ids whose watch now shows as sold — remove them from the dashboard. */
+  soldIds: string[];
   outOfTime: boolean;
 }
 
@@ -241,6 +260,7 @@ export async function scanWatchRecon(opts: ScanOptions): Promise<ScanResult> {
 
   const deals: Deal[] = [];
   const newDeals: Deal[] = [];
+  const soldIds: string[] = [];
   let evaluated = 0;
   let outOfTime = false;
   // WatchRecon lists newest first, so the first post per seller+watch is the live one.
@@ -250,8 +270,11 @@ export async function scanWatchRecon(opts: ScanOptions): Promise<ScanResult> {
     const wk = watchKey(l);
     if (seenWatches.has(wk)) continue;
     seenWatches.add(wk);
+    // Deals are stored per seller+watch, so a repost replaces the old post's card.
+    const dealId = wk.replace(/[^A-Za-z0-9_.-]/g, "_");
+    if (l.sold) { soldIds.push(dealId); continue; }
     if (Date.now() - started > opts.budgetMs) { outOfTime = true; break; }
-    if (!l.price || l.sold || NOT_WATCH.test(l.title) || ACCOUNT_BLOCKLIST.test(l.user)) continue;
+    if (!l.price || NOT_WATCH.test(l.title) || ACCOUNT_BLOCKLIST.test(l.user)) continue;
 
     const evalKey = `wr:eval:${l.postId}`;
     if (await redis().get(evalKey)) continue;
@@ -292,16 +315,18 @@ export async function scanWatchRecon(opts: ScanOptions): Promise<ScanResult> {
 
     const deal: Deal = {
       source: "reddit",
-      id: l.postId,
+      id: dealId,
       title: l.title,
       url: l.url,
       price: l.price,
-      brand: l.title.split(/\s+/)[0] ?? "",
+      brand: l.brand || (l.title.split(/\s+/)[0] ?? ""),
+      imageUrl: l.imageUrl,
       model: ref ?? "",
       median: resale,
       discount: Math.max(0, 1 - l.price / resale),
       // Fresh: 60 + $25 of net per point. Lowball: 50 at a 60%-of-ask offer, 85 when the max offer is near ask.
-      score: Math.max(0, Math.min(100, Math.round(
+      // Flagged deals (scam pattern, new seller, rough comp) never outrank clean ones.
+      score: Math.max(0, Math.min(flags.length ? 65 : 100, Math.round(
         kind === "fresh" ? 60 + net / 25 : 50 + ((maxOffer / l.price - LOWBALL_MIN_OFFER_RATIO) / (1 - LOWBALL_MIN_OFFER_RATIO)) * 35
       ) - (flags.length ? 15 : 0))),
       scoreModifier: 1,
@@ -311,7 +336,7 @@ export async function scanWatchRecon(opts: ScanOptions): Promise<ScanResult> {
       refNumber: ref ?? undefined,
       needsReview: basis === "model table",
       estimatedNetProfit: kind === "fresh" ? net : LOWBALL_TARGET_NET,
-      withinBudget: true,
+      withinBudget: (kind === "lowball" ? maxOffer : l.price) <= opts.maxPrice,
       daysListed: daysUp,
       staleAfterDays: LOWBALL_MIN_DAYS,
       stale: daysUp >= LOWBALL_MIN_DAYS,
@@ -334,33 +359,33 @@ export async function scanWatchRecon(opts: ScanOptions): Promise<ScanResult> {
     deals.push(deal);
 
     // Alert once per seller+watch; reposts only re-alert after a real price drop (>= 5%).
-    const pushKey = `wr:pushed:${wk}`;
-    const lastPushed = await redis().get<number>(pushKey);
-    if (!lastPushed || l.price <= lastPushed * 0.95) {
-      newDeals.push(deal);
-      await redis().set(pushKey, l.price, { ex: 30 * 24 * 3600 });
-    }
+    const lastPushed = await redis().get<number>(`wr:pushed:${dealId}`);
+    if (!lastPushed || l.price <= lastPushed * 0.95) newDeals.push(deal);
   }
 
-  return { fetched: listings.length, evaluated, deals, newDeals, outOfTime };
+  return { fetched: listings.length, evaluated, deals, newDeals, soldIds, outOfTime };
 }
 
-/** Phone push via ntfy.sh (free app, no account). Topic name is the only "key". */
-export async function pushDeal(d: Deal): Promise<void> {
+/**
+ * Phone push via ntfy.sh (free app, no account). Topic name is the only "key".
+ * Returns false when no topic is configured; throws if ntfy rejects the message.
+ */
+export async function pushDeal(d: Deal): Promise<boolean> {
   const topic = process.env.NTFY_TOPIC;
-  if (!topic) return;
+  if (!topic) return false;
+  // HTTP header values must be ASCII, so the title spells out "<=".
   const head =
     d.kind === "lowball"
-      ? `Lowball: offer ≤ $${d.maxOffer} (ask $${d.price}, up ${d.daysListed}d)`
+      ? `Lowball: offer <= $${d.maxOffer} (ask $${d.price}, up ${d.daysListed}d)`
       : `Deal: ~$${d.estimatedNetProfit} net at $${d.price}`;
   const lines = [
     d.title,
     `Resale ~$${d.median} (${d.compBasis})`,
-    `u/${d.seller} · ${(d.sellerPosts ?? 0) >= 50 ? "50+" : d.sellerPosts} posts over ${d.sellerSinceDays}d${d.reposts ? ` · reposted ${d.reposts}x` : ""}`,
+    `u/${d.seller} · ${(d.sellerPosts ?? 0) >= 200 ? "200+" : d.sellerPosts} posts over ${d.sellerSinceDays}d${d.reposts ? ` · reposted ${d.reposts}x` : ""}`,
     ...(d.flags ?? []).map((f) => `⚠ ${f}`),
     "Check USL + confirm still open before paying. G&S only.",
   ];
-  await fetch(`https://ntfy.sh/${encodeURIComponent(topic)}`, {
+  const res = await fetch(`https://ntfy.sh/${encodeURIComponent(topic)}`, {
     method: "POST",
     headers: {
       Title: head.replace(/[^\x20-\x7E]/g, ""),
@@ -371,4 +396,8 @@ export async function pushDeal(d: Deal): Promise<void> {
     },
     body: lines.join("\n"),
   });
+  if (!res.ok) throw new Error(`ntfy HTTP ${res.status}`);
+  // Recorded only after a successful push, so deals found before alerts were set up still alert.
+  await redis().set(`wr:pushed:${d.id}`, d.price, { ex: 30 * 24 * 3600 });
+  return true;
 }

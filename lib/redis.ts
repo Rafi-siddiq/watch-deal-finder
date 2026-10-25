@@ -25,6 +25,9 @@ const SEEN_TTL_SECONDS = 30 * 24 * 60 * 60; // 30 days
 const DEALS_KEY = "deals:store"; // hash: field = "{source}:{id}" -> Deal JSON
 const DEALS_MAX = 200; // cap returned to the dashboard
 const PRUNE_MS = 30 * 24 * 60 * 60 * 1000; // drop deals not confirmed in 30 days
+// WatchRecon deals are re-confirmed every 12h while the post is live (or reposted),
+// so one unseen for 7 days has almost certainly sold or been pulled.
+const WR_PRUNE_MS = 7 * 24 * 60 * 60 * 1000;
 
 function seenKey(source: string, id: string): string {
   return `seen:${source}:${id}`;
@@ -86,6 +89,12 @@ export async function upsertDeal(deal: Deal): Promise<void> {
   }
 }
 
+/** Remove deals by id (e.g. the watch was marked sold). */
+export async function removeDeals(source: string, ids: string[]): Promise<void> {
+  if (ids.length === 0) return;
+  await redis().hdel(DEALS_KEY, ...ids.map((id) => dealField(source, id)));
+}
+
 /**
  * All current flagged deals, newest-first, capped. Prunes deals whose listing
  * hasn't been confirmed active in PRUNE_MS (the listing is gone from the source).
@@ -99,7 +108,8 @@ export async function getDeals(): Promise<Deal[]> {
   for (const [field, value] of Object.entries(map)) {
     const deal = typeof value === "string" ? safeParse<Deal>(value) : (value as Deal);
     if (!deal) continue;
-    if (deal.lastConfirmedActiveAt && now - deal.lastConfirmedActiveAt > PRUNE_MS) {
+    const pruneAfter = deal.kind ? WR_PRUNE_MS : PRUNE_MS;
+    if (deal.lastConfirmedActiveAt && now - deal.lastConfirmedActiveAt > pruneAfter) {
       expiredFields.push(field);
       continue;
     }
