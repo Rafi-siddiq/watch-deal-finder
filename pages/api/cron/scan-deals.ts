@@ -72,6 +72,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       // eBay + saves; unfinished posts are picked up by the next run.
       budgetMs: 35_000,
       maxPrice: maxPurchasePrice,
+      collectionMax: Number(process.env.COLLECTION_MAX_PRICE) || 2000,
     });
     try {
       await removeDeals("reddit", wr.soldIds);

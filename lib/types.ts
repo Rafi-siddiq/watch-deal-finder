@@ -93,8 +93,13 @@ export interface Deal {
   lastConfirmedActiveAt: number;
 
   // --- WatchRecon scanner (r/WE + r/watch_swap via live comps); absent on legacy deals ---
-  /** "fresh": ask already profitable. "lowball": sat >= 21 days, an offer can hit the $400 target. */
-  kind?: "fresh" | "lowball";
+  /**
+   * "fresh": ask already profitable. "lowball": sat >= 21 days, an offer can hit the $400 target.
+   * "collection": personal-collection pick (under 40mm, under the collection budget, below comps).
+   */
+  kind?: "fresh" | "lowball" | "collection";
+  /** Case size parsed from the title, when stated. */
+  caseMm?: number;
   sub?: "Watchexchange" | "watch_swap";
   seller?: string;
   /** Days since the seller's earliest post on WatchRecon (rough account-age signal). */

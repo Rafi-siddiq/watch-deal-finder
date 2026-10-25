@@ -27,10 +27,30 @@ const LOWBALL_MIN_DAYS = 21;
 const LOWBALL_MIN_OFFER_RATIO = 0.6;
 /** Asks this far under comps on a fresh post are the classic scam pattern. */
 const SCAM_RATIO = 0.6;
+/** Collection picks: priced at or below this fraction of comps. */
+const COLLECTION_MAX_RATIO = 0.9;
+
+/** Models that are under 40mm when the title doesn't state a size. */
+const SMALL_MODELS = /black bay 5[48]|bb5[48]|\b79(0[0-3]0|93\d)|1926 3[69]|ranger 36|tudor.*(prince|oysterdate|royal 3[468])|sbg[xwkp]\d|sbgy|sarb0(33|35|59|65)|alpinist.*(spb121|spb155|sarb017)|62mas|spb143|aqua terra.*(36|38)|255[12]|256[12]|seamaster 120|constellation|speedmaster reduced|3510\.|tangente|orion|club campus|ludwig|metro|sinn.*556|longines spirit 37|legend diver 36|master collection|conquest 38|kuoe|lorier|farer|furlan marri|serica|halios|baltic|nivada|monta|kurono|underd0g|\bbrew\b|nodus|christopher ward.*(36|38|twelve)|formex essence|king seiko|credor|tank (must|solo|francaise)|santos galbee|khaki field|intra-?matic 38|explorer 36|1427\d|datejust 36|1623\d|oyster perpetual 3[46]|air.?king|reverso|calatrava|oris.*(65|sixty.?five).*3[68]|pointer date 36/i;
+const NOT_SMALL = /\b4\d(\.\d)?\s?mm\b|\bxl\b|\blarge\b|gmt.?master|big crown pointer date 40|planet ocean|marinemaster|tuna/i;
+/** Already owned — never suggest for the collection. */
+const OWNED = /tissot.*prx|\bprx\b/i;
+
+export function caseSizeOf(title: string): number | undefined {
+  const m = title.match(/\b(\d{2}(?:\.\d)?)\s?mm\b/i);
+  const n = m ? Number(m[1]) : NaN;
+  return n >= 20 && n <= 50 ? n : undefined;
+}
+
+function isSmall(title: string): boolean {
+  const mm = caseSizeOf(title);
+  if (mm !== undefined) return mm < 40;
+  return SMALL_MODELS.test(title) && !NOT_SMALL.test(title);
+}
 
 // Accessory-only / parts / non-sale posts. A title that merely mentions "extra links" or a
 // strap that comes with the watch is fine; one that starts with the accessory is not.
-const NOT_WATCH = /^\W*(?:\[[^\]]*\]\s*)*(?:oem\s+|original\s+|genuine\s+)?(?:strap|bracelet|band|end ?links?|clasp|buckle|deployant|bezel insert)\b|\b(?:strap|bracelet|band|box|dial|movement|parts|links?) only\b|\b(?:straps?|bracelets?|bands?)\s+(?:for|fits?)\b|\b(?:strap|bracelet|band)\s*[-–]?\s*\d{2}\s?mm\b|\bbader\b|strapcode|\bbx\d{3}\b|\bfor parts\b|\blot of\b|\bwtb\b|aftermarket|a-m dial|redial|homage/i;
+const NOT_WATCH = /^\W*(?:\[[^\]]*\]\s*)*(?:oem\s+|original\s+|genuine\s+)?(?:strap|bracelet|band|end ?links?|clasp|buckle|deployant|bezel insert)\b|\b(?:strap|bracelet|band|box|dial|movement|parts|links?) only\b|\b(?:straps?|bracelets?|bands?)\s+(?:for|fits?)\b|\b(?:strap|bracelet|band)\s*[-–]?\s*\d{2}\s?mm\b|\bbader\b|strapcode|\bbx\d{3}\b|\bwatch strap\b|\bsilencer\b|\breplacement\b|\bfor parts\b|\blot of\b|\bwtb\b|aftermarket|a-m dial|redial|homage/i;
 const ACCOUNT_BLOCKLIST = /^(Motor-Special6097|Consistent-Sir629|Evening-Quit-6836|Rosspring|Kwinka000|Local_Abrocoma_749|otf_santos|Legitimate_Box_7803|StatisticianDry2101|deFischer94|Holden-DHLuxuryTime)$/i;
 
 /** Fallback resale for popular models usually listed without a reference (r/WE asks, Oct 2026). */
@@ -151,6 +171,51 @@ async function compFor(ref: string, seller: string): Promise<{ n: number; med: n
   return comp;
 }
 
+const NAME_NOISE = new Set(
+  "wts wtt full set kit box papers mint excellent condition great good like new bnib lnib unworn worn with and the for of in on price drop reduced shipped obo firm only watch watches mens men's automatic auto conus usa us eu card warranty dial serviced fresh service extra strap straps bracelet rare discontinued limited edition le".split(" ")
+);
+
+/** Brand + first few model words, e.g. "nomos club campus 36" — for watches listed without a reference. */
+function nameTokens(t: string): string[] {
+  return t
+    .toLowerCase()
+    .replace(/\[[^\]]*\]|\([^)]*\)|\$[\d,.]+k?|\b(19|20)\d\d\b/g, " ")
+    .replace(/(\d{2}(?:\.\d)?)\s?mm\b/g, "$1mm")
+    .split(/[^a-z0-9.']+/)
+    .filter((w) => w.length > 1 && !NAME_NOISE.has(w))
+    .slice(0, 4);
+}
+
+/**
+ * Median ask of similar listings (same brand/model words, same size when stated,
+ * quartz vs automatic kept apart), other sellers only. Cached 24h.
+ */
+async function compByName(l: WrListing): Promise<{ n: number; med: number } | null> {
+  const tokens = nameTokens(l.title);
+  if (tokens.length < 3) return null;
+  const key = `wr:ncomp:${tokens.join("-")}`;
+  const cached = await redis().get<{ n: number; med: number } | "none">(key);
+  if (cached) return cached === "none" ? null : cached;
+
+  const quartz = /quartz/i.test(l.title);
+  const mm = caseSizeOf(l.title);
+  const need = tokens.length >= 4 ? 3 : tokens.length;
+  const items = await get({ query: tokens.filter((w) => !/mm$/.test(w)).slice(0, 3).join(" "), last_days: 0, price_start: PRICE_MIN, price_end: 30000 });
+  const prices = items
+    .filter((i) => {
+      if (!i.price || i.user === l.user || NOT_WATCH.test(i.title) || /quartz/i.test(i.title) !== quartz) return false;
+      const other = caseSizeOf(i.title);
+      if (mm !== undefined && other !== undefined && Math.abs(mm - other) > 1) return false;
+      const have = new Set(nameTokens(i.title).concat(i.title.toLowerCase().split(/[^a-z0-9.']+/)));
+      return tokens.filter((w) => have.has(w)).length >= need;
+    })
+    .map((i) => i.price)
+    .sort((a, b) => a - b);
+  const comp = prices.length >= 4 ? { n: prices.length, med: prices[Math.floor((prices.length - 1) / 2)] } : null;
+  await redis().set(key, comp ?? "none", { ex: DAY_MS / 1000 });
+  return comp;
+}
+
 function titleKey(t: string): Set<string> {
   return new Set(
     t.toLowerCase()
@@ -227,6 +292,8 @@ export interface ScanOptions {
   budgetMs: number;
   /** MAX_PURCHASE_PRICE; Infinity = no budget. Over-budget deals are flagged, not dropped. */
   maxPrice: number;
+  /** COLLECTION_MAX_PRICE: ceiling for personal-collection picks. */
+  collectionMax: number;
 }
 
 export interface ScanResult {
@@ -292,19 +359,31 @@ export async function scanWatchRecon(opts: ScanOptions): Promise<ScanResult> {
       const m = MODEL_COMPS.find(([re]) => re.test(l.title));
       if (m) { resale = m[1]; basis = "model table"; }
     }
+    // Collection-sized watches are often listed without a reference: compare against similar titles.
+    if (!resale && l.price <= opts.collectionMax && isSmall(l.title)) {
+      const c = await compByName(l);
+      if (c) { resale = c.med; basis = `median of ${c.n} similar listings`; compCount = c.n; }
+    }
     await redis().set(evalKey, 1, { ex: 12 * 3600 });
     if (!resale) continue;
+    // Under 30% of comps is a part/accessory the filter missed, a typo, or a scam — never a real deal.
+    if (l.price < 0.3 * resale) continue;
 
     const net = netAt(resale, l.price);
     const maxOffer = Math.round(SALE_KEEP * resale - SALE_COST - LOWBALL_TARGET_NET);
     const lowballPossible = maxOffer >= LOWBALL_MIN_OFFER_RATIO * l.price && maxOffer < l.price;
-    if (net < opts.minNet && !lowballPossible) continue;
+    const collectionPossible =
+      l.price <= opts.collectionMax && l.price <= COLLECTION_MAX_RATIO * resale && isSmall(l.title) && !OWNED.test(l.title);
+    if (net < opts.minNet && !lowballPossible && !collectionPossible) continue;
 
     const h = await historyFor(l);
     const daysUp = Math.floor((Date.now() - h.firstPostedAt) / DAY_MS);
+    // Similar-title comps are good enough to spot a fair collection price, not to bank a flip on.
+    const nameComp = basis.includes("similar listings");
     let kind: Deal["kind"];
-    if (net >= opts.minNet) kind = "fresh";
-    else if (daysUp >= LOWBALL_MIN_DAYS) kind = "lowball";
+    if (net >= opts.minNet && !nameComp) kind = "fresh";
+    else if (lowballPossible && daysUp >= LOWBALL_MIN_DAYS && !nameComp) kind = "lowball";
+    else if (collectionPossible) kind = "collection";
     else continue;
 
     const sellerDays = Math.floor((Date.now() - h.sellerSince) / DAY_MS);
@@ -325,9 +404,14 @@ export async function scanWatchRecon(opts: ScanOptions): Promise<ScanResult> {
       median: resale,
       discount: Math.max(0, 1 - l.price / resale),
       // Fresh: 60 + $25 of net per point. Lowball: 50 at a 60%-of-ask offer, 85 when the max offer is near ask.
+      // Collection: 60 at 10% under comps, +2 per extra point of discount.
       // Flagged deals (scam pattern, new seller, rough comp) never outrank clean ones.
       score: Math.max(0, Math.min(flags.length ? 65 : 100, Math.round(
-        kind === "fresh" ? 60 + net / 25 : 50 + ((maxOffer / l.price - LOWBALL_MIN_OFFER_RATIO) / (1 - LOWBALL_MIN_OFFER_RATIO)) * 35
+        kind === "fresh"
+          ? 60 + net / 25
+          : kind === "lowball"
+            ? 50 + ((maxOffer / l.price - LOWBALL_MIN_OFFER_RATIO) / (1 - LOWBALL_MIN_OFFER_RATIO)) * 35
+            : 60 + (1 - l.price / resale - (1 - COLLECTION_MAX_RATIO)) * 200
       ) - (flags.length ? 15 : 0))),
       scoreModifier: 1,
       underDescribed: false,
@@ -335,8 +419,9 @@ export async function scanWatchRecon(opts: ScanOptions): Promise<ScanResult> {
       createdAt: h.firstPostedAt,
       refNumber: ref ?? undefined,
       needsReview: basis === "model table",
-      estimatedNetProfit: kind === "fresh" ? net : LOWBALL_TARGET_NET,
-      withinBudget: (kind === "lowball" ? maxOffer : l.price) <= opts.maxPrice,
+      estimatedNetProfit: kind === "lowball" ? LOWBALL_TARGET_NET : net,
+      withinBudget: (kind === "lowball" ? maxOffer : l.price) <= (kind === "collection" ? opts.collectionMax : opts.maxPrice),
+      caseMm: caseSizeOf(l.title),
       daysListed: daysUp,
       staleAfterDays: LOWBALL_MIN_DAYS,
       stale: daysUp >= LOWBALL_MIN_DAYS,
@@ -377,7 +462,9 @@ export async function pushDeal(d: Deal): Promise<boolean> {
   const head =
     d.kind === "lowball"
       ? `Lowball: offer <= $${d.maxOffer} (ask $${d.price}, up ${d.daysListed}d)`
-      : `Deal: ~$${d.estimatedNetProfit} net at $${d.price}`;
+      : d.kind === "collection"
+        ? `For you: $${d.price}, ${Math.round(d.discount * 100)}% under market${d.caseMm ? `, ${d.caseMm}mm` : ""}`
+        : `Flip: ~$${d.estimatedNetProfit} net at $${d.price}`;
   const lines = [
     d.title,
     `Resale ~$${d.median} (${d.compBasis})`,
