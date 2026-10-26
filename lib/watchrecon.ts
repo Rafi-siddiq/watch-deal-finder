@@ -457,11 +457,11 @@ export async function scanWatchRecon(opts: ScanOptions): Promise<ScanResult> {
     let short = false;
     for (let i = 0; i < pages.length && !short; i += 3) {
       const batch = pages.slice(i, i + 3);
-      const results = await Promise.all(
-        batch.map((n) => get({ last_days: opts.days, price_start: PRICE_MIN, price_end: PRICE_MAX, current_page: n }, [src]).catch(() => [] as WrListing[]))
-      );
-      results.forEach((items) => listings.push(...items));
-      short = results.some((items) => items.length < 50);
+      const fetchPage = (n: number) => get({ last_days: opts.days, price_start: PRICE_MIN, price_end: PRICE_MAX, current_page: n }, [src]);
+      // A failed fetch is retried once and never read as "end of list" (only a real short page is).
+      const results = await Promise.all(batch.map((n) => fetchPage(n).catch(() => sleep(800).then(() => fetchPage(n)).catch(() => null))));
+      results.forEach((items) => items && listings.push(...items));
+      short = results.some((items) => items !== null && items.length < 50);
       await sleep(250);
     }
     return short;
