@@ -15,8 +15,11 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const SOURCES = ["RWX", "RWS"];
 const PRICE_MIN = 150;
 const PRICE_MAX = 8000;
-/** Most WatchRecon pages to read per subreddit per run (50 listings each). */
+/** Deepest WatchRecon page to sweep per subreddit (50 listings each, ~12 days of r/WE). */
 const MAX_PAGES = 60;
+/** Pages read every run (about the last day of r/WE), plus older pages read in rotation. */
+const NEWEST_PAGES = 6;
+const OLDER_PAGES_PER_RUN = 12;
 
 /** Reddit resale: ~3.5% PayPal G&S fee + ~$30 insured shipping. */
 const SALE_KEEP = 0.965;
@@ -446,21 +449,32 @@ export interface ScanResult {
  */
 export async function scanWatchRecon(opts: ScanOptions): Promise<ScanResult> {
   const listings: WrListing[] = [];
-  // r/Watchexchange posts ~250/day, so a window takes many 50-listing pages. Read them
-  // 3 at a time until the window is covered (short page) or the page cap / time limit hits.
+  // r/Watchexchange posts ~250/day and each 50-listing page takes ~2s, so one run can't read
+  // a whole window. Every run reads the newest pages (nothing new is missed) plus the next
+  // chunk of older pages, resuming where the last run stopped; a few runs sweep the window.
   const pageCap = Math.min(MAX_PAGES, Math.ceil(opts.days * 6));
-  const fetchUntil = Date.now() + 15_000;
-  // r/watch_swap first: it is small, so the busy r/Watchexchange can't starve it of time.
-  for (const src of [...SOURCES].reverse()) {
-    for (let p = 1; p <= pageCap && Date.now() < fetchUntil; p += 3) {
-      const pages = [p, p + 1, p + 2].filter((n) => n <= pageCap);
+  const readPages = async (src: string, pages: number[]) => {
+    let short = false;
+    for (let i = 0; i < pages.length && !short; i += 3) {
+      const batch = pages.slice(i, i + 3);
       const results = await Promise.all(
-        pages.map((n) => get({ last_days: opts.days, price_start: PRICE_MIN, price_end: PRICE_MAX, current_page: n }, [src]).catch(() => [] as WrListing[]))
+        batch.map((n) => get({ last_days: opts.days, price_start: PRICE_MIN, price_end: PRICE_MAX, current_page: n }, [src]).catch(() => [] as WrListing[]))
       );
       results.forEach((items) => listings.push(...items));
-      if (results.some((items) => items.length < 50)) break;
+      short = results.some((items) => items.length < 50);
       await sleep(250);
     }
+    return short;
+  };
+  // r/watch_swap first: it is small, so the busy r/Watchexchange can't starve it of time.
+  for (const src of [...SOURCES].reverse()) {
+    const newest = Array.from({ length: Math.min(NEWEST_PAGES, pageCap) }, (_, i) => i + 1);
+    if (await readPages(src, newest)) continue; // the whole window fit in the newest pages
+    const cursorKey = `wr:pages:${src}:${opts.days}`;
+    const start = Math.max(NEWEST_PAGES + 1, Number(await redis().get<number>(cursorKey)) || NEWEST_PAGES + 1);
+    const older = Array.from({ length: OLDER_PAGES_PER_RUN }, (_, i) => start + i).filter((n) => n <= pageCap);
+    const reachedEnd = (await readPages(src, older)) || older.length < OLDER_PAGES_PER_RUN;
+    await redis().set(cursorKey, reachedEnd ? NEWEST_PAGES + 1 : start + OLDER_PAGES_PER_RUN, { ex: 7 * 24 * 3600 });
   }
 
   const deals: Deal[] = [];
