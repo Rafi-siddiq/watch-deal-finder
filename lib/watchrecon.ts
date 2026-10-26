@@ -401,6 +401,8 @@ export interface ScanResult {
   deals: Deal[];
   /** Deal ids whose watch now shows as sold — remove them from the dashboard. */
   soldIds: string[];
+  /** Deal ids re-checked this run that no longer qualify (rules changed, price went up…) — remove them. */
+  droppedIds: string[];
   outOfTime: boolean;
 }
 
@@ -421,6 +423,7 @@ export async function scanWatchRecon(opts: ScanOptions): Promise<ScanResult> {
 
   const deals: Deal[] = [];
   const soldIds: string[] = [];
+  const judged: string[] = [];
   let evaluated = 0;
   let outOfTime = false;
   // WatchRecon lists newest first, so the first post per seller+watch is the live one.
@@ -439,6 +442,7 @@ export async function scanWatchRecon(opts: ScanOptions): Promise<ScanResult> {
     const evalKey = `wr:eval:${l.postId}`;
     if (await redis().get(evalKey)) continue;
     evaluated++;
+    judged.push(dealId);
     const allowName = MICRO.test(l.title) || l.price <= opts.cheapMax || (l.price <= opts.collectionMax && isSmall(l.title));
     const comp = await compOf(l.title, l.user, allowName);
     await redis().set(evalKey, 1, { ex: 12 * 3600 });
@@ -503,7 +507,8 @@ export async function scanWatchRecon(opts: ScanOptions): Promise<ScanResult> {
     });
   }
 
-  return { fetched: listings.length, evaluated, deals, soldIds, outOfTime };
+  const kept = new Set(deals.map((d) => d.id));
+  return { fetched: listings.length, evaluated, deals, soldIds, droppedIds: judged.filter((id) => !kept.has(id)), outOfTime };
 }
 
 /**
@@ -512,10 +517,11 @@ export async function scanWatchRecon(opts: ScanOptions): Promise<ScanResult> {
  * parts, rough or "as is" pieces, low-feedback sellers, or parts-condition items.
  * Price includes shipping.
  */
-export async function scanEbay(listings: RawListing[], opts: ScanOptions): Promise<{ evaluated: number; deals: Deal[]; outOfTime: boolean }> {
+export async function scanEbay(listings: RawListing[], opts: ScanOptions): Promise<{ evaluated: number; deals: Deal[]; droppedIds: string[]; outOfTime: boolean }> {
   const deals: Deal[] = [];
   let evaluated = 0;
   let outOfTime = false;
+  const judgedEbay: string[] = [];
   for (const l of listings) {
     if (Date.now() > opts.deadline) { outOfTime = true; break; }
     if (!l.price || l.price < PRICE_MIN) continue;
@@ -527,6 +533,7 @@ export async function scanEbay(listings: RawListing[], opts: ScanOptions): Promi
     const evalKey = `wr:eeval:${l.id}`;
     if (await redis().get(evalKey)) continue;
     evaluated++;
+    judgedEbay.push(l.id);
     const seller = l.sellerName ?? "";
     const allowName = MICRO.test(l.title) || l.price <= opts.cheapMax || (l.price <= opts.collectionMax && isSmall(l.title));
     const comp = await compOf(l.title, seller, allowName);
@@ -585,5 +592,6 @@ export async function scanEbay(listings: RawListing[], opts: ScanOptions): Promi
       flags,
     });
   }
-  return { evaluated, deals, outOfTime };
+  const keptEbay = new Set(deals.map((d) => d.id));
+  return { evaluated, deals, droppedIds: judgedEbay.filter((id) => !keptEbay.has(id)), outOfTime };
 }

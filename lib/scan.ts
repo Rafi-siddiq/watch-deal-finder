@@ -52,6 +52,7 @@ export async function runScan(days: number): Promise<ScanSummary> {
       await removeDeals("reddit", wr.soldIds);
       summary.removed.sold = wr.soldIds.length;
     }
+    await removeDeals("reddit", wr.droppedIds);
   } catch (e) {
     summary.reddit.error = (e as Error).message;
     console.error("[scan] reddit failed:", summary.reddit.error);
@@ -64,6 +65,7 @@ export async function runScan(days: number): Promise<ScanSummary> {
     try {
       const { listings, failed } = await fetchEbayListings();
       const eb = await scanEbay(listings, { ...base, deadline: started + 48_000 });
+      await removeDeals("ebay", eb.droppedIds);
       summary.ebay = {
         ok: failed.length === 0 || listings.length > 0,
         fetched: listings.length,
