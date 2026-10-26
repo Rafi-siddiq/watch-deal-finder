@@ -103,6 +103,8 @@ async function store(deals: Deal[]): Promise<number> {
     const prev = existing.get(`${fresh.source}:${fresh.id}`);
     const d: Deal = {
       ...fresh,
+      // First time the site found this watch stays fixed, so "new since your last visit" means new.
+      foundAt: prev?.foundAt ?? fresh.foundAt,
       // Keep the AI review at the same price, and what the Reddit checker learned about this post.
       ai: prev?.ai && prev.ai.price === fresh.price ? prev.ai : undefined,
       redditCheckedAt: prev?.url === fresh.url ? prev?.redditCheckedAt : undefined,

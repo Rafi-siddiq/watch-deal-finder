@@ -155,11 +155,14 @@ export default function DealRow({
   hidden,
   onToggleHide,
   onMarkSold,
+  isNew = false,
 }: {
   deal: Deal;
   hidden: boolean;
   onToggleHide: () => void;
   onMarkSold: () => void;
+  /** Found since your last visit. */
+  isNew?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -190,7 +193,13 @@ export default function DealRow({
         <div className="min-w-0 flex-1">
           <h3 className="line-clamp-2 text-[15px] font-medium leading-snug text-foreground">{d.title}</h3>
           <p className="mt-1 font-mono text-[11px] text-muted">
-            {sub} · {postedAgo(d) ? `posted ${postedAgo(d)}` : `found ${fmtWhen(d.foundAt)}`}
+            {isNew && <span className="mr-1.5 rounded-full bg-brand px-1.5 py-px text-[10px] font-semibold text-[#1a1408]">NEW</span>}
+            {sub} ·{" "}
+            {postedAgo(d)
+              ? `${d.reposts ? "reposted" : "posted"} ${postedAgo(d)}`
+              : d.source === "ebay" && d.createdAt
+                ? `listed ${fmtWhen(d.createdAt)}`
+                : `found ${fmtWhen(d.foundAt)}`}
             {!d.withinBudget && <span className="text-[#d9a441]"> · over budget</span>}
           </p>
         </div>

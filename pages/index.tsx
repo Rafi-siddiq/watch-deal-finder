@@ -50,11 +50,25 @@ function rank(a: Deal, b: Deal): number {
   return Number(maybeSold(a)) - Number(maybeSold(b)) || b.score - a.score || b.estimatedNetProfit - a.estimatedNetProfit;
 }
 
+type Sort = "newest" | "best";
+
+/** When the listing went up or was last bumped (Reddit), or was listed (eBay). */
+function postedAt(d: Deal): number {
+  return d.lastPostedAt ?? d.createdAt ?? d.foundAt;
+}
+
+/** Newest first: what just came in (or was just bumped) leads. */
+function byNewest(a: Deal, b: Deal): number {
+  return postedAt(b) - postedAt(a) || b.score - a.score;
+}
+
 /** Deals shown per tab before "Show more". */
 const TOP_N = 8;
 
 const HIDDEN_KEY = "wdf:hidden";
 const TAB_KEY = "wdf:tab";
+const SORT_KEY = "wdf:sort";
+const VISIT_KEY = "wdf:lastVisit";
 
 function readHidden(): Set<string> {
   try {
@@ -73,6 +87,9 @@ export default function Dashboard() {
   const [hidden, setHidden] = useState<Set<string>>(new Set());
   const [showHidden, setShowHidden] = useState(false);
   const [showAll, setShowAll] = useState(false);
+  const [sort, setSort] = useState<Sort>("newest");
+  /** Previous visit time; deals the site found after it get a NEW badge (0 = first visit, no badges). */
+  const [lastVisit, setLastVisit] = useState(0);
   const [scanning, setScanning] = useState(false);
   const [scanNote, setScanNote] = useState("");
 
@@ -146,6 +163,14 @@ export default function Dashboard() {
             /* storage blocked */
           }
           setHidden(readHidden());
+          try {
+            const savedSort = localStorage.getItem(SORT_KEY);
+            if (savedSort === "best" || savedSort === "newest") setSort(savedSort);
+            setLastVisit(Number(localStorage.getItem(VISIT_KEY)) || 0);
+            localStorage.setItem(VISIT_KEY, String(Date.now()));
+          } catch {
+            /* storage blocked */
+          }
           setLoading(false);
         }
       }
@@ -154,6 +179,18 @@ export default function Dashboard() {
       active = false;
     };
   }, []);
+
+  function pickSort(s: Sort) {
+    setSort(s);
+    setShowAll(false);
+    try {
+      localStorage.setItem(SORT_KEY, s);
+    } catch {
+      /* storage blocked */
+    }
+  }
+
+  const isNew = (d: Deal) => lastVisit > 0 && d.foundAt > lastVisit;
 
   function pickTab(t: Tab) {
     setTab(t);
@@ -209,17 +246,25 @@ export default function Dashboard() {
     return c;
   }, [matches, hidden]);
 
+  /** Tabs holding deals found since your last visit (shown as a dot). */
+  const tabsWithNew = useMemo(() => {
+    const s = new Set<Tab>();
+    for (const d of matches) if (lastVisit > 0 && d.foundAt > lastVisit && !hidden.has(`${d.source}:${d.id}`) && d.ai?.verdict !== "skip") s.add(tabOf(d));
+    return s;
+  }, [matches, hidden, lastVisit]);
+
   const inTab = useMemo(() => matches.filter((d) => tabOf(d) === tab), [matches, tab]);
   // Tucked away: deals you hid, and deals Claude reviewed as "skip".
   const isTucked = (d: Deal) => hidden.has(`${d.source}:${d.id}`) || d.ai?.verdict === "skip";
   const hiddenInTab = inTab.filter((d) => hidden.has(`${d.source}:${d.id}`)).length;
   const skippedInTab = inTab.filter((d) => d.ai?.verdict === "skip" && !hidden.has(`${d.source}:${d.id}`)).length;
   const rows = useMemo(
-    () => inTab.filter((d) => showHidden || !isTucked(d)).sort(rank),
+    () => inTab.filter((d) => showHidden || !isTucked(d)).sort(sort === "newest" ? byNewest : rank),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [inTab, hidden, showHidden]
+    [inTab, hidden, showHidden, sort]
   );
-  // The site is a first pass, so each tab leads with its best few; the rest is one tap away.
+  const newInTab = rows.filter(isNew).length;
+  // The site is a first pass, so each tab leads with its first few; the rest is one tap away.
   const visibleRows = showAll || q ? rows : rows.slice(0, TOP_N);
 
   const lastScan = useMemo(() => {
@@ -254,7 +299,10 @@ export default function Dashboard() {
                   }`}
                 >
                   <span>{t.label}</span>
-                  <span className="text-[13px] font-semibold tabular-nums">{counts[t.key]}</span>
+                  <span className="text-[13px] font-semibold tabular-nums">
+                    {counts[t.key]}
+                    {tabsWithNew.has(t.key) && <span className="ml-0.5 align-super text-[9px]" aria-label="has new deals">●</span>}
+                  </span>
                 </button>
               ))}
             </nav>
@@ -279,7 +327,27 @@ export default function Dashboard() {
         </header>
 
         <main className="mx-auto max-w-2xl px-4 pb-10 pt-4">
-          <p className="mb-4 text-[13px] leading-relaxed text-muted">{blurb}</p>
+          <p className="mb-3 text-[13px] leading-relaxed text-muted">{blurb}</p>
+
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <p className="font-mono text-[11px] text-muted">
+              {newInTab > 0 ? <span className="text-brand">{newInTab} new since your last visit</span> : lastVisit > 0 ? "Nothing new here since your last visit" : ""}
+            </p>
+            <div className="flex flex-shrink-0 rounded-full border border-border bg-card p-0.5" role="group" aria-label="Sort">
+              {(["newest", "best"] as Sort[]).map((s) => (
+                <button
+                  key={s}
+                  onClick={() => pickSort(s)}
+                  aria-pressed={sort === s}
+                  className={`rounded-full px-3 py-1 font-mono text-[11px] transition-colors duration-150 ${
+                    sort === s ? "bg-brand text-[#1a1408]" : "text-muted hover:bg-brand/10 hover:text-foreground"
+                  }`}
+                >
+                  {s === "newest" ? "Newest" : "Best"}
+                </button>
+              ))}
+            </div>
+          </div>
 
           {loading ? (
             <div className="flex flex-col gap-3">
@@ -311,6 +379,7 @@ export default function Dashboard() {
                   hidden={hidden.has(`${d.source}:${d.id}`)}
                   onToggleHide={() => toggleHide(d)}
                   onMarkSold={() => markSold(d)}
+                  isNew={isNew(d)}
                 />
               ))}
             </div>
