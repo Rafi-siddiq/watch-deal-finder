@@ -107,12 +107,23 @@ function unesc(s: string): string {
     .replace(/&ndash;|&mdash;/g, "-").replace(/&[lr]squo;/g, "'").replace(/&[lr]dquo;/g, '"');
 }
 
-async function get(params: Record<string, string | number>, sources: string[] = []): Promise<WrListing[]> {
+const PAGE_SIZE = 50;
+
+/**
+ * One WatchRecon results page. `full` comes from the raw entry count: parse() drops
+ * non-Reddit entries, so a full page can parse to fewer than 50 listings.
+ */
+async function getPage(params: Record<string, string | number>, sources: string[] = []): Promise<{ items: WrListing[]; full: boolean }> {
   const qs = new URLSearchParams(Object.entries(params).map(([k, v]) => [k, String(v)]));
   for (const s of sources) qs.append("source[]", s);
   const res = await fetch(BASE + "?" + qs, { headers: { "User-Agent": UA } });
   if (!res.ok) throw new Error(`WatchRecon HTTP ${res.status}`);
-  return parse(await res.text());
+  const html = await res.text();
+  return { items: parse(html), full: html.split('class="galleryItemContainer med"').length - 1 >= PAGE_SIZE };
+}
+
+async function get(params: Record<string, string | number>, sources: string[] = []): Promise<WrListing[]> {
+  return (await getPage(params, sources)).items;
 }
 
 export function parse(html: string): WrListing[] {
@@ -178,9 +189,9 @@ async function compFor(ref: string, seller: string, title: string): Promise<{ n:
     const re = new RegExp(`(?<![0-9])${ref.replace(/[.]/g, "\\.?").replace(/-/g, "-?")}(?![0-9])`, "i");
     asks = [];
     for (let p = 1; p <= 3; p++) {
-      const items = await get({ query: ref, last_days: 0, price_start: PRICE_MIN, price_end: 30000, current_page: p });
+      const { items, full } = await getPage({ query: ref, last_days: 0, price_start: PRICE_MIN, price_end: 30000, current_page: p });
       for (const i of items) if (i.price && re.test(i.title) && !NOT_WATCH.test(i.title)) asks.push([i.price, i.user, i.brand.toLowerCase()]);
-      if (items.length < 50) break;
+      if (!full) break;
       await sleep(400);
     }
     await redis().set(key, asks, { ex: DAY_MS / 1000 });
@@ -283,9 +294,9 @@ async function historyFor(l: WrListing): Promise<SellerHistory> {
   // Busy dealers have hundreds of posts; page back far enough to find this watch's first post.
   const items: WrListing[] = [];
   for (let p = 1; p <= 4; p++) {
-    const page = await get({ user_name: l.user, last_days: 0, include_duplicate: 1, current_page: p });
+    const { items: page, full } = await getPage({ user_name: l.user, last_days: 0, include_duplicate: 1, current_page: p });
     items.push(...page);
-    if (page.length < 50) break;
+    if (!full) break;
     await sleep(400);
   }
   const now = Date.now();
@@ -457,11 +468,11 @@ export async function scanWatchRecon(opts: ScanOptions): Promise<ScanResult> {
     let short = false;
     for (let i = 0; i < pages.length && !short; i += 3) {
       const batch = pages.slice(i, i + 3);
-      const fetchPage = (n: number) => get({ last_days: opts.days, price_start: PRICE_MIN, price_end: PRICE_MAX, current_page: n }, [src]);
+      const fetchPage = (n: number) => getPage({ last_days: opts.days, price_start: PRICE_MIN, price_end: PRICE_MAX, current_page: n }, [src]);
       // A failed fetch is retried once and never read as "end of list" (only a real short page is).
       const results = await Promise.all(batch.map((n) => fetchPage(n).catch(() => sleep(800).then(() => fetchPage(n)).catch(() => null))));
-      results.forEach((items) => items && listings.push(...items));
-      short = results.some((items) => items !== null && items.length < 50);
+      results.forEach((r) => r && listings.push(...r.items));
+      short = results.some((r) => r !== null && !r.full);
       await sleep(250);
     }
     return short;
