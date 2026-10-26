@@ -53,7 +53,7 @@ function isSmall(title: string): boolean {
 
 // Accessory-only / parts / non-sale posts. A title that merely mentions "extra links" or a
 // strap that comes with the watch is fine; one that starts with the accessory is not.
-const NOT_WATCH = /^\W*(?:\[[^\]]*\]\s*)*(?:oem\s+|original\s+|genuine\s+)?(?:strap|bracelet|band|end ?links?|clasp|buckle|deployant|bezel insert)\b|\b(?:strap|bracelet|band|box|dial|movement|parts|links?) only\b|\b(?:straps?|bracelets?|bands?)\s+(?:for|fits?)\b|\b(?:strap|bracelet|band)\s*[-–]?\s*\d{2}\s?mm\b|\bbader\b|strapcode|\bbx\d{3}\b|\bwatch strap\b|\bsilencer\b|\breplacement\b|\bfor parts\b|\blot of\b|\bwtb\b|aftermarket|a-m dial|redial|homage/i;
+const NOT_WATCH = /^\W*(?:\[[^\]]*\]\s*)*(?:oem\s+|original\s+|genuine\s+)?(?:strap|bracelet|band|end ?links?|clasp|buckle|deployant|bezel insert)\b|\b(?:strap|bracelet|band|box|dial|movement|parts|links?) only\b|\b(?:straps?|bracelets?|bands?)\s+(?:for|fits?)\b|\b(?:strap|bracelet|band)\s*[-–]?\s*\d{2}\s?mm\b|\bbader\b|strapcode|\bbx\d{3}\b|\bwatch strap\b|\bsilencer\b|\breplacement\b|\bfor parts\b|\blot of\b|\bwtb\b|^\W*\[wtt\](?!.*\bwts\b)|aftermarket|a-m dial|redial|homage/i;
 const ACCOUNT_BLOCKLIST = /^(Motor-Special6097|Consistent-Sir629|Evening-Quit-6836|Rosspring|Kwinka000|Local_Abrocoma_749|otf_santos|Legitimate_Box_7803|StatisticianDry2101|deFischer94|Holden-DHLuxuryTime)$/i;
 
 /** Fallback resale for popular models usually listed without a reference (r/WE asks, Oct 2026). */
