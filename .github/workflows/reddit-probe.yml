@@ -1,0 +1,12 @@
+# TEMPORARY: can GitHub's runners read Reddit post RSS? (delete after the test)
+name: reddit-probe
+on: workflow_dispatch
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          for u in "https://www.reddit.com/r/Watchexchange/comments/1xehrt8/.rss" "https://old.reddit.com/r/Watchexchange/comments/1xehrt8/.rss" "https://www.reddit.com/comments/1xehrt8.json"; do
+            code=$(curl -s -o body.txt -w "%{http_code}" -A "watch-deal-finder/1.0 (personal deal research)" "$u")
+            echo "$code $(wc -c < body.txt) $u"; sleep 3
+          done
