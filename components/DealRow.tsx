@@ -140,7 +140,12 @@ function SellerLine({ d }: { d: Deal }) {
   return (
     <>
       {" · "}u/{d.seller}{" "}
-      <span className="text-muted">({(d.sellerPosts ?? 0) >= 200 ? "200+" : d.sellerPosts} posts)</span>
+      {d.trades !== undefined ? (
+        <span className={d.trades < 3 ? "text-[#e6c27a]" : "text-muted"}>({d.trades} trade{d.trades === 1 ? "" : "s"})</span>
+      ) : (
+        <span className="text-muted">({(d.sellerPosts ?? 0) >= 200 ? "200+" : d.sellerPosts} posts)</span>
+      )}
+      {d.redditCheckedAt && <span className="text-[#7bbf8e]"> · ✓ still up {fmtWhen(d.redditCheckedAt)}</span>}
     </>
   );
 }

@@ -158,7 +158,9 @@ async function brief(d: Deal): Promise<string> {
       lines.push("Item details: unavailable (listing may have ended)");
     }
   } else {
-    lines.push(`Seller: u/${d.seller} — ${d.sellerPosts ?? "?"} posts on record over ${d.sellerSinceDays ?? "?"} days (Reddit trade count not available)`);
+    lines.push(
+      `Seller: u/${d.seller} — ${d.trades !== undefined ? `${d.trades} confirmed Reddit trades, ` : "Reddit trade count unknown, "}${d.sellerPosts ?? "?"} posts on record over ${d.sellerSinceDays ?? "?"} days`
+    );
     lines.push("Post text: not available, only the title.");
   }
   if (d.flags?.length) lines.push(`Scanner warnings: ${d.flags.join(" | ")}`);

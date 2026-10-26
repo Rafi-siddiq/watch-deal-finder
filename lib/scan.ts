@@ -98,7 +98,13 @@ async function store(deals: Deal[]): Promise<number> {
   for (const fresh of deals) {
     if (sold.has(`${fresh.source}:${fresh.id}`)) continue; // you marked it sold
     const prev = existing.get(`${fresh.source}:${fresh.id}`);
-    const d = prev?.ai && prev.ai.price === fresh.price ? { ...fresh, ai: prev.ai } : fresh;
+    const d: Deal = {
+      ...fresh,
+      // Keep the AI review at the same price, and what the Reddit checker learned about this post.
+      ai: prev?.ai && prev.ai.price === fresh.price ? prev.ai : undefined,
+      redditCheckedAt: prev?.url === fresh.url ? prev?.redditCheckedAt : undefined,
+      trades: prev?.seller === fresh.seller ? prev?.trades : undefined,
+    };
     try {
       await upsertDeal(d);
       n++;

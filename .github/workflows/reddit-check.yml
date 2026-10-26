@@ -1,0 +1,30 @@
+# Every 30 min: checks the site's Reddit deals (Reddit blocks Vercel, not GitHub) and
+# removes sold/deleted ones, recording seller trade counts. One request at a time at
+# Reddit's pace (about one per minute), flips first. Needs repo secret CRON_SECRET
+# (same value as on Vercel); without it the job skips quietly.
+name: reddit-check
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: reddit-check
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 28
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Check Reddit deals
+        env:
+          APP_URL: https://watch-deal-finder.vercel.app
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          TIME_BUDGET_MS: "1440000"
+        run: node scripts/check-reddit.mjs
