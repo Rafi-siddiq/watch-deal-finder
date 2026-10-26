@@ -75,6 +75,7 @@ Check for:
 How to judge each deal type:
 - fresh (flip): is the asking price really below what this exact watch resells for?
 - lowball (flip): has it sat long enough that the max offer shown is a realistic counteroffer?
+- cheap (flip under $1,500): will it really resell for enough to clear about $150-250? Cheap watches with an inflated comp are the common trap.
 - micro: is it a fair-to-good price for this microbrand, for the buyer's collection or a small flip?
 - collection: a personal buy, not a flip. Is it a fair or good price for a nice watch under 40mm? Ignore resale profit.
 
@@ -92,7 +93,7 @@ Missing information is NOT a red flag: no post text, unknown trade count, or an 
 "note" is one plain sentence of at most 25 words the buyer can act on, e.g. "Comp mixes the 41mm; this 36mm midsize sells nearer $1,800, so the profit is thin." For a clean listing, say briefly why it's a good lead.`;
 
 /** Bump when the review instructions change so existing reviews are redone. */
-const PROMPT_VERSION = 3;
+const PROMPT_VERSION = 4;
 
 const FLAG_TYPES = ["wrong_variant", "parts_or_aftermarket", "rough_condition", "scam_pattern", "overpriced", "hard_to_resell"] as const;
 type FlagType = (typeof FLAG_TYPES)[number];
@@ -134,7 +135,7 @@ async function brief(d: Deal): Promise<string> {
     `Title: ${d.title}`,
     `Asking: $${d.price}${d.source === "ebay" && d.shippingIncluded !== undefined ? ` (includes $${d.shippingIncluded} shipping)` : ""}`,
     `Comparison: ~$${d.median} — ${d.compBasis ?? "unknown basis"}`,
-    d.kind === "lowball" || (d.kind === "micro" && (d.maxOffer ?? 0) >= 0.5 * d.price)
+    d.kind === "lowball" || ((d.kind === "micro" || d.kind === "cheap") && (d.maxOffer ?? 0) >= 0.5 * d.price)
       ? `Max offer that still hits the profit target: $${d.maxOffer}`
       : d.kind === "collection" || d.kind === "micro"
         ? `Priced ${Math.round(d.discount * 100)}% below the comparison`
@@ -186,10 +187,17 @@ export async function reviewDeal(d: Deal): Promise<AiReview | null> {
     const out = JSON.parse(text) as { red_flags?: { type: FlagType; detail: string }[]; note?: string };
     const flags = (out.red_flags ?? []).filter((f) => FLAG_TYPES.includes(f.type));
     // The verdict follows from the flags, so "not enough info" can't turn every deal into a maybe.
-    const verdict: AiReview["verdict"] = flags.some((f) => SKIP_FLAGS.has(f.type)) ? "skip" : flags.length ? "caution" : "keep";
+    let verdict: AiReview["verdict"] = flags.some((f) => SKIP_FLAGS.has(f.type)) ? "skip" : flags.length ? "caution" : "keep";
+    const issues = flags.map((f) => f.detail);
+    // A clean read can't vouch for a seller with no track record: thin history is never a plain "keep".
+    const thinSeller = (d.trades !== undefined && d.trades < 3) || (d.flags ?? []).some((x) => /new seller/i.test(x));
+    if (verdict === "keep" && thinSeller) {
+      verdict = "caution";
+      issues.push(d.trades !== undefined ? `Seller has only ${d.trades} Reddit trade${d.trades === 1 ? "" : "s"}` : "Seller has little or no history");
+    }
     return {
       verdict,
-      issues: flags.map((f) => f.detail),
+      issues,
       note: out.note ?? "",
       model: response.model,
       reviewedAt: Date.now(),

@@ -32,7 +32,8 @@ const COLLECTION_MAX_RATIO = 0.9;
 
 /** Models that are under 40mm when the title doesn't state a size. */
 const SMALL_MODELS = /black bay 5[48]|bb5[48]|\b79(0[0-3]0|93\d)|1926 3[69]|ranger 36|tudor.*(prince|oysterdate|royal 3[468])|sbg[xwkp]\d|sbgy|sarb0(33|35|59|65)|alpinist.*(spb121|spb155|sarb017)|62mas|spb143|aqua terra.*(36|38)|255[12]|256[12]|seamaster 120|constellation|speedmaster reduced|3510\.|tangente|orion|club campus|ludwig|metro|sinn.*556|longines spirit 37|legend diver 36|master collection|conquest 38|kuoe|lorier|\bfarer\b|furlan marri|serica|halios|baltic|nivada|monta|kurono|underd0g|\bbrew\b|nodus|christopher ward.*(36|38|twelve)|formex essence|king seiko|credor|tank (must|solo|francaise)|santos galbee|khaki field|intra-?matic 38|explorer 36|1427\d|datejust 36|1623\d|oyster perpetual 3[46]|air.?king|reverso|calatrava|oris.*(65|sixty.?five).*3[68]|pointer date 36/i;
-const NOT_SMALL = /\b4\d(\.\d)?\s?mm\b|\bxl\b|\blarge\b|gmt.?master|big crown pointer date 40|planet ocean|marinemaster|tuna/i;
+// Without a stated size these run 40mm+ (41mm Hydronaut, 40mm world-timers, most GMTs and chronographs).
+const NOT_SMALL = /\b4\d(\.\d)?\s?mm\b|\bxl\b|\blarge\b|gmt|big crown pointer date 40|planet ocean|marinemaster|tuna|hydronaut|world ?time|chrono(graph)?\b|aquis/i;
 /** Already owned — never suggest for the collection. */
 const OWNED = /tissot.*prx|\bprx\b/i;
 
@@ -288,6 +289,11 @@ const MICRO = /\b(traska|kuoe|maen|lorier|baltic|farer|furlan marri|serica|halio
 /** Profit target for a microbrand lowball (smaller watches, smaller margins). */
 const MICRO_TARGET_NET = 200;
 const MICRO_MAX_RATIO = 0.9;
+/** Cheap flips: under CHEAP_MAX_PRICE, at least this profit at asking, or an offer that nets CHEAP_TARGET_NET. */
+const CHEAP_MIN_NET = 150;
+const CHEAP_TARGET_NET = 250;
+const CHEAP_MIN_DAYS = 14;
+const CHEAP_MIN_OFFER_RATIO = 0.65;
 
 /**
  * Old / tired pieces that sit unsold: unserviced vintage, "as is", untested, rough.
@@ -347,10 +353,27 @@ function judge(price: number, comp: Comp, title: string, daysUp: number | null, 
       return { kind: "micro", net, maxOffer: microOffer, score: cap(50 + ((microOffer / price - 0.7) / 0.3) * 30) };
     }
   }
+  if (price <= opts.cheapMax) {
+    // Small flips (your Beaubleu/Feynman range): $150+ at asking, or an offer on a stale listing that nets $250.
+    // Similar-title comps are looser, so they must also show a real gap.
+    const cheapOffer = Math.round(SALE_KEEP * resale - SALE_COST - CHEAP_TARGET_NET);
+    if (net >= CHEAP_MIN_NET && (!byName || ratio <= 0.85)) return { kind: "cheap", net, maxOffer: 0, score: cap(60 + net / 10) };
+    if (daysUp !== null && daysUp >= CHEAP_MIN_DAYS && cheapOffer < price && cheapOffer >= CHEAP_MIN_OFFER_RATIO * price) {
+      return { kind: "cheap", net, maxOffer: cheapOffer, score: cap(50 + ((cheapOffer / price - CHEAP_MIN_OFFER_RATIO) / (1 - CHEAP_MIN_OFFER_RATIO)) * 35) };
+    }
+  }
   if (price <= opts.collectionMax && ratio <= COLLECTION_MAX_RATIO && isSmall(title) && !OWNED.test(title)) {
     return { kind: "collection", net, maxOffer, score: cap(60 + (1 - ratio - (1 - COLLECTION_MAX_RATIO)) * 200) };
   }
   return null;
+}
+
+/** Profit shown on the card: at asking, or the target an offer is sized to hit. */
+function profitOf(v: Verdict): number {
+  if (v.kind === "lowball") return LOWBALL_TARGET_NET;
+  if (v.kind === "cheap" && v.maxOffer > 0) return CHEAP_TARGET_NET;
+  if (v.kind === "micro" && v.maxOffer > 0) return MICRO_TARGET_NET;
+  return v.net;
 }
 
 function ageTierOf(days: number): Deal["ageTier"] {
@@ -368,6 +391,8 @@ export interface ScanOptions {
   maxPrice: number;
   /** COLLECTION_MAX_PRICE: ceiling for personal-collection picks. */
   collectionMax: number;
+  /** CHEAP_MAX_PRICE: ceiling for the cheap-flips tab. */
+  cheapMax: number;
 }
 
 export interface ScanResult {
@@ -414,7 +439,7 @@ export async function scanWatchRecon(opts: ScanOptions): Promise<ScanResult> {
     const evalKey = `wr:eval:${l.postId}`;
     if (await redis().get(evalKey)) continue;
     evaluated++;
-    const allowName = MICRO.test(l.title) || (l.price <= opts.collectionMax && isSmall(l.title));
+    const allowName = MICRO.test(l.title) || l.price <= opts.cheapMax || (l.price <= opts.collectionMax && isSmall(l.title));
     const comp = await compOf(l.title, l.user, allowName);
     await redis().set(evalKey, 1, { ex: 12 * 3600 });
     if (!comp) continue;
@@ -453,7 +478,7 @@ export async function scanWatchRecon(opts: ScanOptions): Promise<ScanResult> {
       createdAt: h.firstPostedAt,
       refNumber: ref ?? undefined,
       needsReview: comp.basis === "model table",
-      estimatedNetProfit: v.kind === "lowball" ? LOWBALL_TARGET_NET : v.kind === "micro" && v.net < MICRO_TARGET_NET ? MICRO_TARGET_NET : v.net,
+      estimatedNetProfit: profitOf(v),
       withinBudget: (v.kind === "lowball" ? v.maxOffer : l.price) <= (v.kind === "collection" ? opts.collectionMax : opts.maxPrice),
       caseMm: caseSizeOf(l.title),
       daysListed: daysUp,
@@ -503,7 +528,7 @@ export async function scanEbay(listings: RawListing[], opts: ScanOptions): Promi
     if (await redis().get(evalKey)) continue;
     evaluated++;
     const seller = l.sellerName ?? "";
-    const allowName = MICRO.test(l.title) || (l.price <= opts.collectionMax && isSmall(l.title));
+    const allowName = MICRO.test(l.title) || l.price <= opts.cheapMax || (l.price <= opts.collectionMax && isSmall(l.title));
     const comp = await compOf(l.title, seller, allowName);
     await redis().set(evalKey, 1, { ex: 12 * 3600 });
     if (!comp) continue;
@@ -539,7 +564,7 @@ export async function scanEbay(listings: RawListing[], opts: ScanOptions): Promi
       refNumber: ref ?? undefined,
       condition: l.condition,
       needsReview: comp.basis === "model table",
-      estimatedNetProfit: v.kind === "lowball" ? LOWBALL_TARGET_NET : v.net,
+      estimatedNetProfit: profitOf(v),
       withinBudget: (v.kind === "lowball" ? v.maxOffer : total) <= (v.kind === "collection" ? opts.collectionMax : opts.maxPrice),
       caseMm: caseSizeOf(l.title),
       daysListed: daysUp,

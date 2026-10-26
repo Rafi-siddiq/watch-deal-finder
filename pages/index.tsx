@@ -4,13 +4,18 @@ import type { Deal } from "@/lib/types";
 import DealRow from "@/components/DealRow";
 import { fmtWhen, maybeSold } from "@/components/dealUtils";
 
-type Tab = "flips" | "lowball" | "micro" | "collection";
+type Tab = "flips" | "cheap" | "lowball" | "micro" | "collection";
 
 const TABS: { key: Tab; label: string; blurb: string }[] = [
   {
     key: "flips",
     label: "Flips",
     blurb: "Reddit and eBay watches priced under what the same reference sells for on Reddit. Fresh underpriced posts go fast, so message quickly.",
+  },
+  {
+    key: "cheap",
+    label: "Cheap",
+    blurb: "Under $1,500: priced to net $150+ as listed, or sitting 2+ weeks where an offer still nets about $250. Your Beaubleu/Feynman range.",
   },
   {
     key: "lowball",
@@ -32,6 +37,7 @@ const TABS: { key: Tab; label: string; blurb: string }[] = [
 function tabOf(d: Deal): Tab {
   if (d.kind === "lowball") return "lowball";
   if (d.kind === "micro") return "micro";
+  if (d.kind === "cheap") return "cheap";
   if (d.kind === "collection") return "collection";
   return "flips";
 }
@@ -43,6 +49,9 @@ function tabOf(d: Deal): Tab {
 function rank(a: Deal, b: Deal): number {
   return Number(maybeSold(a)) - Number(maybeSold(b)) || b.score - a.score || b.estimatedNetProfit - a.estimatedNetProfit;
 }
+
+/** Deals shown per tab before "Show more". */
+const TOP_N = 8;
 
 const HIDDEN_KEY = "wdf:hidden";
 const TAB_KEY = "wdf:tab";
@@ -63,6 +72,7 @@ export default function Dashboard() {
   const [search, setSearch] = useState("");
   const [hidden, setHidden] = useState<Set<string>>(new Set());
   const [showHidden, setShowHidden] = useState(false);
+  const [showAll, setShowAll] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [scanNote, setScanNote] = useState("");
 
@@ -147,6 +157,7 @@ export default function Dashboard() {
 
   function pickTab(t: Tab) {
     setTab(t);
+    setShowAll(false);
     try {
       localStorage.setItem(TAB_KEY, t);
     } catch {
@@ -193,7 +204,7 @@ export default function Dashboard() {
   );
 
   const counts = useMemo(() => {
-    const c: Record<Tab, number> = { flips: 0, lowball: 0, micro: 0, collection: 0 };
+    const c: Record<Tab, number> = { flips: 0, cheap: 0, lowball: 0, micro: 0, collection: 0 };
     for (const d of matches) if (!hidden.has(`${d.source}:${d.id}`) && d.ai?.verdict !== "skip") c[tabOf(d)]++;
     return c;
   }, [matches, hidden]);
@@ -208,6 +219,8 @@ export default function Dashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [inTab, hidden, showHidden]
   );
+  // The site is a first pass, so each tab leads with its best few; the rest is one tap away.
+  const visibleRows = showAll || q ? rows : rows.slice(0, TOP_N);
 
   const lastScan = useMemo(() => {
     const t = deals.filter((d) => d.kind).map((d) => d.lastConfirmedActiveAt || d.foundAt);
@@ -230,13 +243,13 @@ export default function Dashboard() {
               <p className="font-mono text-[11px] text-muted">{lastScan ? `updated ${lastScan}` : ""}</p>
             </div>
 
-            <nav className="mt-3 grid grid-cols-4 gap-1 rounded-2xl border border-border bg-card p-1" aria-label="Deal type">
+            <nav className="mt-3 grid grid-cols-5 gap-1 rounded-2xl border border-border bg-card p-1" aria-label="Deal type">
               {TABS.map((t) => (
                 <button
                   key={t.key}
                   onClick={() => pickTab(t.key)}
                   aria-current={tab === t.key ? "page" : undefined}
-                  className={`flex flex-col items-center rounded-xl px-1 py-1.5 font-mono text-[12px] leading-tight transition-colors duration-150 ${
+                  className={`flex flex-col items-center rounded-xl px-0.5 py-1.5 font-mono text-[11px] leading-tight transition-colors duration-150 ${
                     tab === t.key ? "bg-brand text-[#1a1408]" : "text-muted hover:bg-brand/10 hover:text-foreground"
                   }`}
                 >
@@ -291,7 +304,7 @@ export default function Dashboard() {
             />
           ) : (
             <div className="flex flex-col gap-3">
-              {rows.map((d) => (
+              {visibleRows.map((d) => (
                 <DealRow
                   key={`${d.source}:${d.id}`}
                   deal={d}
@@ -301,6 +314,15 @@ export default function Dashboard() {
                 />
               ))}
             </div>
+          )}
+
+          {!loading && !error && visibleRows.length < rows.length && (
+            <button
+              onClick={() => setShowAll(true)}
+              className="mt-4 w-full rounded-xl border border-brand/40 py-2.5 font-mono text-[12px] text-brand transition-colors duration-150 hover:bg-brand/10"
+            >
+              Show {rows.length - visibleRows.length} more
+            </button>
           )}
 
           {!loading && !error && hiddenInTab + skippedInTab > 0 && (

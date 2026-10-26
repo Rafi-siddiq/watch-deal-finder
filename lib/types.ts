@@ -106,8 +106,9 @@ export interface Deal {
    * "fresh": ask already profitable. "lowball": sat >= 21 days, an offer can hit the $400 target.
    * "collection": personal-collection pick (under 40mm, under the collection budget, below comps).
    * "micro": popular microbrand priced under comps, or sitting long enough for a ~$200 lowball.
+   * "cheap": under CHEAP_MAX_PRICE, $150+ profit at asking, or stale with an offer that nets $250.
    */
-  kind?: "fresh" | "lowball" | "collection" | "micro";
+  kind?: "fresh" | "lowball" | "collection" | "micro" | "cheap";
   /** Case size parsed from the title, when stated. */
   caseMm?: number;
   sub?: "Watchexchange" | "watch_swap";

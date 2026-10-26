@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { AiReview, Deal } from "@/lib/types";
-import { fmtMoney, fmtWhen, offerFor, draftOfferMessage, maybeSold, postedAgo } from "@/components/dealUtils";
+import { fmtMoney, fmtWhen, offerFor, draftOfferMessage, maybeSold, postedAgo, sellsFast } from "@/components/dealUtils";
 
 /** Listing photo with a watch-glyph fallback (missing / broken image). */
 function Photo({ url }: { url?: string }) {
@@ -56,7 +56,7 @@ function ActionButton({ onClick, children }: { onClick: () => void; children: Re
 /** The headline numbers, phrased per deal type the way you'd act on them. */
 function Numbers({ d }: { d: Deal }) {
   // Lowballs, and microbrands whose value is in an offer below the ask.
-  if ((d.kind === "lowball" || d.kind === "micro") && d.maxOffer && d.maxOffer >= 0.5 * d.price && d.maxOffer < d.price) {
+  if ((d.kind === "lowball" || d.kind === "micro" || d.kind === "cheap") && d.maxOffer && d.maxOffer >= 0.5 * d.price && d.maxOffer < d.price) {
     return (
       <div className="grid grid-cols-3 gap-3">
         <Stat label="Offer up to" value={fmtMoney(d.maxOffer)} className="text-brand" />
@@ -207,7 +207,7 @@ export default function DealRow({
 
       {quiet && (
         <p className="mt-2.5 rounded-xl border border-border bg-background px-3 py-2 font-mono text-[11.5px] leading-relaxed text-muted">
-          {d.kind === "fresh"
+          {sellsFast(d)
             ? `Posted ${postedAgo(d)}. Underpriced flips usually sell within hours, so it may be gone. Check the post first.`
             : `Seller hasn’t bumped this since ${postedAgo(d)}. It may have sold or been deleted. Check the post first.`}
         </p>

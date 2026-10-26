@@ -30,9 +30,13 @@ const WR_PRUNE_MS = 7 * 24 * 60 * 60 * 1000;
 // Underpriced flips usually sell within hours; one not bumped in 36h, or anything else
 // not bumped in 14 days, has almost always sold or been pulled.
 const DAY = 24 * 60 * 60 * 1000;
+/** Underpriced-at-asking deals (flips, cheap flips) go within hours; offer-based ones sit. */
+function sellsFast(d: Deal): boolean {
+  return d.kind === "fresh" || (d.kind === "cheap" && !d.maxOffer);
+}
 function silentTooLong(d: Deal, now: number): boolean {
   if (d.source !== "reddit" || !d.lastPostedAt) return false;
-  return now - d.lastPostedAt > (d.kind === "fresh" ? 1.5 : 14) * DAY;
+  return now - d.lastPostedAt > (sellsFast(d) ? 1.5 : 14) * DAY;
 }
 
 function seenKey(source: string, id: string): string {

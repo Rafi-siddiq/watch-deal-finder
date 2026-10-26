@@ -35,6 +35,7 @@ export async function runScan(days: number): Promise<ScanSummary> {
     minNet: Number(process.env.MIN_NET_PROFIT) || 300,
     maxPrice: maxPurchasePriceFromEnv(),
     collectionMax: Number(process.env.COLLECTION_MAX_PRICE) || 2000,
+    cheapMax: Number(process.env.CHEAP_MAX_PRICE) || 1500,
   };
   const summary: ScanSummary = {
     reddit: { ok: false, fetched: 0, evaluated: 0, stored: 0, outOfTime: false },

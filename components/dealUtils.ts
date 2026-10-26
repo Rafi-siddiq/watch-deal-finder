@@ -1,5 +1,10 @@
 import type { Deal } from "@/lib/types";
 
+/** Underpriced-at-asking deals (flips, cheap flips) go within hours; offer-based ones sit. */
+export function sellsFast(d: Deal): boolean {
+  return d.kind === "fresh" || (d.kind === "cheap" && !d.maxOffer);
+}
+
 export function fmtMoney(n: number): string {
   const neg = n < 0;
   return (neg ? "-$" : "$") + Math.abs(Math.round(n)).toLocaleString("en-US");
@@ -26,7 +31,7 @@ export function hoursSincePosted(deal: Deal, now = Date.now()): number | undefin
  */
 export function maybeSold(deal: Deal, now = Date.now()): boolean {
   const hours = hoursSincePosted(deal, now);
-  return hours !== undefined && hours >= (deal.kind === "fresh" ? 12 : 7 * 24);
+  return hours !== undefined && hours >= (sellsFast(deal) ? 12 : 7 * 24);
 }
 
 /** "3h ago" / "2d ago" for when the seller last posted. */
@@ -57,9 +62,9 @@ export function suggestedOffer(price: number, ageTier: AgeTier): { pct: number; 
 export function offerFor(deal: Deal): { pct: number; offer: number; basis: string } {
   const age = suggestedOffer(deal.price, deal.ageTier);
   // Only lowball-style deals carry a meaningful max offer; ignore implausibly low ones.
-  const offerKind = deal.kind === "lowball" || deal.kind === "micro";
+  const offerKind = deal.kind === "lowball" || deal.kind === "micro" || deal.kind === "cheap";
   if (offerKind && deal.maxOffer && deal.maxOffer >= 0.5 * deal.price && deal.maxOffer < age.offer) {
-    const target = deal.kind === "micro" ? "$200" : "$400";
+    const target = deal.kind === "micro" ? "$200" : deal.kind === "cheap" ? "$250" : "$400";
     return { pct: 1 - deal.maxOffer / deal.price, offer: deal.maxOffer, basis: `max offer that still nets ${target}` };
   }
   return { ...age, basis: `${Math.round(age.pct * 100)}% off for ${AGE_META[deal.ageTier].label.toLowerCase()} listing` };
