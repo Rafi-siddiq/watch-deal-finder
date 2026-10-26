@@ -1,4 +1,4 @@
-# TEMPORARY: can GitHub's runners read Reddit post RSS? (delete after the test)
+# TEMPORARY: Reddit rate limits from GitHub runners (delete after the test)
 name: reddit-probe
 on: workflow_dispatch
 jobs:
@@ -6,7 +6,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - run: |
-          for u in "https://www.reddit.com/r/Watchexchange/comments/1xehrt8/.rss" "https://old.reddit.com/r/Watchexchange/comments/1xehrt8/.rss" "https://www.reddit.com/comments/1xehrt8.json"; do
-            code=$(curl -s -o body.txt -w "%{http_code}" -A "watch-deal-finder/1.0 (personal deal research)" "$u")
-            echo "$code $(wc -c < body.txt) $u"; sleep 3
+          for id in 1xehrt8 1xed15i 1xb42wz 1xef336 1xe9xrt 1xas15e 1xebjxa 1xelnp2 1xdzwmm 1xegxjd 1xdx1gr 1xeh0jw; do
+            curl -s -o b.txt -D h.txt -A "watch-deal-finder/1.0 (personal deal research)" "https://www.reddit.com/comments/$id/.rss"
+            echo "PROBE $id $(head -1 h.txt | tr -d '\r') bytes=$(wc -c < b.txt) remaining=$(grep -i x-ratelimit-remaining h.txt | tr -d '\r' | cut -d' ' -f2) reset=$(grep -i x-ratelimit-reset h.txt | tr -d '\r' | cut -d' ' -f2) entries=$(grep -o '<entry>' b.txt | wc -l)"
+            sleep 2
           done
