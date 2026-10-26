@@ -109,7 +109,7 @@ async function ebaySearch(term: string, token: string, limitPerTerm: number): Pr
  *    search (fetchWithBackoff only handles 429/5xx, not 401).
  * Returns whatever succeeded plus the list of failed brand terms.
  */
-export async function fetchEbayListings(limitPerTerm = 25): Promise<EbayFetchResult> {
+export async function fetchEbayListings(limitPerTerm = 75): Promise<EbayFetchResult> {
   let token = await getToken(); // throws only if creds are missing/invalid
   const out: RawListing[] = [];
   const seen = new Set<string>();

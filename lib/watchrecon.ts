@@ -15,6 +15,8 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const SOURCES = ["RWX", "RWS"];
 const PRICE_MIN = 150;
 const PRICE_MAX = 8000;
+/** Most WatchRecon pages to read per subreddit per run (50 listings each). */
+const MAX_PAGES = 60;
 
 /** Reddit resale: ~3.5% PayPal G&S fee + ~$30 insured shipping. */
 const SALE_KEEP = 0.965;
@@ -310,7 +312,7 @@ const MICRO = /\b(traska|kuoe|maen|lorier|baltic|farer|furlan marri|serica|halio
 const MICRO_TARGET_NET = 200;
 const MICRO_MAX_RATIO = 0.9;
 /** Cheap flips: under CHEAP_MAX_PRICE, at least this profit at asking, or an offer that nets CHEAP_TARGET_NET. */
-const CHEAP_MIN_NET = 150;
+const CHEAP_MIN_NET = 125;
 const CHEAP_TARGET_NET = 250;
 const CHEAP_MIN_DAYS = 14;
 const CHEAP_MIN_OFFER_RATIO = 0.65;
@@ -444,12 +446,20 @@ export interface ScanResult {
  */
 export async function scanWatchRecon(opts: ScanOptions): Promise<ScanResult> {
   const listings: WrListing[] = [];
-  for (const src of SOURCES) {
-    for (let p = 1; p <= (opts.days > 1 ? 8 : 3); p++) {
-      const items = await get({ last_days: opts.days, price_start: PRICE_MIN, price_end: PRICE_MAX, current_page: p }, [src]);
-      listings.push(...items);
-      if (items.length < 50) break;
-      await sleep(400);
+  // r/Watchexchange posts ~250/day, so a window takes many 50-listing pages. Read them
+  // 3 at a time until the window is covered (short page) or the page cap / time limit hits.
+  const pageCap = Math.min(MAX_PAGES, Math.ceil(opts.days * 6));
+  const fetchUntil = Date.now() + 15_000;
+  // r/watch_swap first: it is small, so the busy r/Watchexchange can't starve it of time.
+  for (const src of [...SOURCES].reverse()) {
+    for (let p = 1; p <= pageCap && Date.now() < fetchUntil; p += 3) {
+      const pages = [p, p + 1, p + 2].filter((n) => n <= pageCap);
+      const results = await Promise.all(
+        pages.map((n) => get({ last_days: opts.days, price_start: PRICE_MIN, price_end: PRICE_MAX, current_page: n }, [src]).catch(() => [] as WrListing[]))
+      );
+      results.forEach((items) => listings.push(...items));
+      if (results.some((items) => items.length < 50)) break;
+      await sleep(250);
     }
   }
 

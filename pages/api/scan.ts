@@ -13,7 +13,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(405).json({ ok: false, error: "method not allowed" });
   }
   try {
-    const s = await runScan(2);
+    // 3 days: catches new posts plus recently bumped older listings (lowball targets).
+    const s = await runScan(3);
     return res.status(s.reddit.ok || s.ebay.ok ? 200 : 502).json({ ok: s.reddit.ok || s.ebay.ok, ...s });
   } catch (e) {
     console.error("[api/scan] failed:", (e as Error).message);

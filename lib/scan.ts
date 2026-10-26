@@ -32,7 +32,7 @@ export async function runScan(days: number): Promise<ScanSummary> {
   const started = Date.now();
   const base: Omit<ScanOptions, "deadline"> = {
     days,
-    minNet: Number(process.env.MIN_NET_PROFIT) || 300,
+    minNet: Number(process.env.MIN_NET_PROFIT) || 250,
     maxPrice: maxPurchasePriceFromEnv(),
     collectionMax: Number(process.env.COLLECTION_MAX_PRICE) || 2000,
     cheapMax: Number(process.env.CHEAP_MAX_PRICE) || 1500,
