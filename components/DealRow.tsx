@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { AiReview, Deal } from "@/lib/types";
-import { fmtMoney, fmtWhen, offerFor, draftOfferMessage, maybeSold, daysSincePosted } from "@/components/dealUtils";
+import { fmtMoney, fmtWhen, offerFor, draftOfferMessage, maybeSold, postedAgo } from "@/components/dealUtils";
 
 /** Listing photo with a watch-glyph fallback (missing / broken image). */
 function Photo({ url }: { url?: string }) {
@@ -145,7 +145,17 @@ function SellerLine({ d }: { d: Deal }) {
   );
 }
 
-export default function DealRow({ deal: d, hidden, onToggleHide }: { deal: Deal; hidden: boolean; onToggleHide: () => void }) {
+export default function DealRow({
+  deal: d,
+  hidden,
+  onToggleHide,
+  onMarkSold,
+}: {
+  deal: Deal;
+  hidden: boolean;
+  onToggleHide: () => void;
+  onMarkSold: () => void;
+}) {
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const { offer, basis } = offerFor(d);
@@ -175,7 +185,7 @@ export default function DealRow({ deal: d, hidden, onToggleHide }: { deal: Deal;
         <div className="min-w-0 flex-1">
           <h3 className="line-clamp-2 text-[15px] font-medium leading-snug text-foreground">{d.title}</h3>
           <p className="mt-1 font-mono text-[11px] text-muted">
-            {sub} · found {fmtWhen(d.foundAt)}
+            {sub} · {postedAgo(d) ? `posted ${postedAgo(d)}` : `found ${fmtWhen(d.foundAt)}`}
             {!d.withinBudget && <span className="text-[#d9a441]"> · over budget</span>}
           </p>
         </div>
@@ -192,7 +202,9 @@ export default function DealRow({ deal: d, hidden, onToggleHide }: { deal: Deal;
 
       {quiet && (
         <p className="mt-2.5 rounded-xl border border-border bg-background px-3 py-2 font-mono text-[11.5px] leading-relaxed text-muted">
-          Seller hasn&apos;t bumped this in {daysSincePosted(d)} days — it may have sold or been deleted. Check the post first.
+          {d.kind === "fresh"
+            ? `Posted ${postedAgo(d)}. Underpriced flips usually sell within hours, so it may be gone. Check the post first.`
+            : `Seller hasn’t bumped this since ${postedAgo(d)}. It may have sold or been deleted. Check the post first.`}
         </p>
       )}
 
@@ -211,6 +223,7 @@ export default function DealRow({ deal: d, hidden, onToggleHide }: { deal: Deal;
         {d.uslUrl && <ActionLink href={d.uslUrl}>Scam check ↗</ActionLink>}
         <ActionButton onClick={() => setOpen((v) => !v)}>{open ? "Less" : d.kind === "lowball" ? "Offer message" : "Details"}</ActionButton>
         <ActionButton onClick={onToggleHide}>{hidden ? "Unhide" : "Hide"}</ActionButton>
+        <ActionButton onClick={onMarkSold}>Mark sold</ActionButton>
       </div>
 
       {open && (

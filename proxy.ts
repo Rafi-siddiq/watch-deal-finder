@@ -4,7 +4,7 @@ import { AUTH_COOKIE, pinToken, safeEqual } from "@/lib/auth";
 
 /**
  * PIN gate. Protects the dashboard page ("/"), the deals API ("/api/deals") and
- * the on-demand scan and AI review ("/api/scan", "/api/review").
+ * the on-demand scan, AI review and mark-sold ("/api/scan", "/api/review", "/api/mark-sold").
  * Everything else — /login, /api/login, /api/cron/*, static assets — is public
  * (see the matcher below). The cron endpoint has its own optional CRON_SECRET.
  */
@@ -28,5 +28,5 @@ export async function proxy(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/", "/api/deals", "/api/scan", "/api/review"],
+  matcher: ["/", "/api/deals", "/api/scan", "/api/review", "/api/mark-sold"],
 };

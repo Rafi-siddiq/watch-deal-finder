@@ -15,17 +15,25 @@ export function fmtWhen(ms: number): string {
   return `${Math.round(hrs / 24)}d ago`;
 }
 
-const DAY_MS = 24 * 60 * 60 * 1000;
-
-/** Days since a Reddit seller last posted/bumped this watch (undefined for eBay / older deals). */
-export function daysSincePosted(deal: Deal, now = Date.now()): number | undefined {
-  return deal.source === "reddit" && deal.lastPostedAt ? Math.floor((now - deal.lastPostedAt) / DAY_MS) : undefined;
+/** Hours since a Reddit seller last posted/bumped this watch (undefined for eBay / older deals). */
+export function hoursSincePosted(deal: Deal, now = Date.now()): number | undefined {
+  return deal.source === "reddit" && deal.lastPostedAt ? Math.floor((now - deal.lastPostedAt) / 3_600_000) : undefined;
 }
 
-/** Reddit sellers bump unsold watches every few days; a quiet post has often sold or been deleted. */
+/**
+ * Underpriced flips usually sell within hours; other Reddit posts get bumped every few
+ * days while unsold. A post quiet past that has often sold or been deleted.
+ */
 export function maybeSold(deal: Deal, now = Date.now()): boolean {
-  const days = daysSincePosted(deal, now);
-  return days !== undefined && days >= (deal.kind === "fresh" ? 3 : 7);
+  const hours = hoursSincePosted(deal, now);
+  return hours !== undefined && hours >= (deal.kind === "fresh" ? 12 : 7 * 24);
+}
+
+/** "3h ago" / "2d ago" for when the seller last posted. */
+export function postedAgo(deal: Deal, now = Date.now()): string | undefined {
+  const hours = hoursSincePosted(deal, now);
+  if (hours === undefined) return undefined;
+  return hours < 1 ? "just now" : hours < 48 ? `${hours}h ago` : `${Math.floor(hours / 24)}d ago`;
 }
 
 export type AgeTier = Deal["ageTier"];

@@ -1,6 +1,6 @@
 import { scanWatchRecon, scanEbay, type ScanOptions } from "./watchrecon";
 import { fetchEbayListings, ebayItemAvailable } from "./ebay";
-import { upsertDeal, removeDeals, getDeals } from "./redis";
+import { upsertDeal, removeDeals, getDeals, soldMarked } from "./redis";
 import { checkRedditPosts, redditApiConfigured } from "./redditApi";
 import { aiReviewConfigured, reviewDeals } from "./aiReview";
 import type { Deal } from "./types";
@@ -93,8 +93,10 @@ export async function runScan(days: number): Promise<ScanSummary> {
 async function store(deals: Deal[]): Promise<number> {
   // Keep an existing AI review when the scanner refreshes a deal at the same price.
   const existing = new Map((await getDeals().catch(() => [] as Deal[])).map((d) => [`${d.source}:${d.id}`, d]));
+  const sold = await soldMarked(deals).catch(() => new Set<string>());
   let n = 0;
   for (const fresh of deals) {
+    if (sold.has(`${fresh.source}:${fresh.id}`)) continue; // you marked it sold
     const prev = existing.get(`${fresh.source}:${fresh.id}`);
     const d = prev?.ai && prev.ai.price === fresh.price ? { ...fresh, ai: prev.ai } : fresh;
     try {

@@ -154,6 +154,23 @@ export default function Dashboard() {
     }
   }
 
+  /** Removes a deal you know sold, for every device; the scanner won't re-add it. */
+  async function markSold(d: Deal) {
+    const key = `${d.source}:${d.id}`;
+    setDeals((prev) => prev.filter((x) => `${x.source}:${x.id}` !== key));
+    try {
+      const res = await fetch("/api/mark-sold", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ source: d.source, id: d.id }),
+      });
+      if (!res.ok) throw new Error(String(res.status));
+    } catch {
+      setDeals((prev) => (prev.some((x) => `${x.source}:${x.id}` === key) ? prev : [...prev, d]));
+      setScanNote("Couldn't mark that as sold. Try again.");
+    }
+  }
+
   function toggleHide(d: Deal) {
     const key = `${d.source}:${d.id}`;
     setHidden((prev) => {
@@ -280,6 +297,7 @@ export default function Dashboard() {
                   deal={d}
                   hidden={hidden.has(`${d.source}:${d.id}`)}
                   onToggleHide={() => toggleHide(d)}
+                  onMarkSold={() => markSold(d)}
                 />
               ))}
             </div>

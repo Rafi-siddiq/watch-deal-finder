@@ -27,12 +27,12 @@ const DEALS_MAX = 200; // cap returned to the dashboard
 // Scanner deals are re-confirmed every 12h while the post is live (or reposted) and
 // eBay items are re-checked every 6h, so one unseen for 7 days is gone.
 const WR_PRUNE_MS = 7 * 24 * 60 * 60 * 1000;
-// Reddit sellers bump unsold watches every few days. A flip not bumped in 5 days, or
-// anything else not bumped in 14, has almost always sold or been pulled.
+// Underpriced flips usually sell within hours; one not bumped in 36h, or anything else
+// not bumped in 14 days, has almost always sold or been pulled.
 const DAY = 24 * 60 * 60 * 1000;
 function silentTooLong(d: Deal, now: number): boolean {
   if (d.source !== "reddit" || !d.lastPostedAt) return false;
-  return now - d.lastPostedAt > (d.kind === "fresh" ? 5 : 14) * DAY;
+  return now - d.lastPostedAt > (d.kind === "fresh" ? 1.5 : 14) * DAY;
 }
 
 function seenKey(source: string, id: string): string {
@@ -99,6 +99,22 @@ export async function upsertDeal(deal: Deal): Promise<void> {
 export async function removeDeals(source: string, ids: string[]): Promise<void> {
   if (ids.length === 0) return;
   await redis().hdel(DEALS_KEY, ...ids.map((id) => dealField(source, id)));
+}
+
+const SOLD_MARK_TTL_SECONDS = 30 * 24 * 60 * 60;
+
+/** User says it sold: remove it and keep the scanner from re-adding it for 30 days. */
+export async function markSold(source: string, id: string): Promise<void> {
+  await redis().set(`sold:${dealField(source, id)}`, 1, { ex: SOLD_MARK_TTL_SECONDS });
+  await removeDeals(source, [id]);
+}
+
+/** Of these deals, the ones the user marked sold. */
+export async function soldMarked(deals: Deal[]): Promise<Set<string>> {
+  if (deals.length === 0) return new Set();
+  const fields = deals.map((d) => dealField(d.source, d.id));
+  const marks = await redis().mget<(number | null)[]>(...fields.map((f) => `sold:${f}`));
+  return new Set(fields.filter((_, i) => marks[i]));
 }
 
 /**
