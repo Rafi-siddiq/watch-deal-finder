@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useReducedMotion, motion } from "framer-motion";
 import Head from "next/head";
 import type { Deal } from "@/lib/types";
 import DealRow from "@/components/DealRow";
@@ -272,123 +273,123 @@ export default function Dashboard() {
     return t.length ? fmtWhen(Math.max(...t)) : null;
   }, [deals]);
 
-  const blurb = TABS.find((t) => t.key === tab)?.blurb ?? "";
+  const reduceMotion = useReducedMotion();
+
+  const activeTab = TABS.find((t) => t.key === tab) ?? TABS[0];
 
   return (
     <>
       <Head>
         <title>Watch Deals</title>
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
       </Head>
-      <div className="min-h-screen bg-background text-foreground">
-        <header className="sticky top-0 z-10 border-b border-border bg-background/95 backdrop-blur">
-          <div className="mx-auto max-w-2xl px-4 pt-4">
-            <div className="flex items-baseline justify-between gap-3">
-              <h1 className="font-serif text-2xl font-medium tracking-tight">Watch deals</h1>
-              <p className="font-mono text-[11px] text-muted">{lastScan ? `updated ${lastScan}` : ""}</p>
-            </div>
-
-            <nav className="mt-3 grid grid-cols-5 gap-1 rounded-2xl border border-border bg-card p-1" aria-label="Deal type">
-              {TABS.map((t) => (
-                <button
-                  key={t.key}
-                  onClick={() => pickTab(t.key)}
-                  aria-current={tab === t.key ? "page" : undefined}
-                  className={`flex flex-col items-center rounded-xl px-0.5 py-1.5 font-mono text-[11px] leading-tight transition-colors duration-150 ${
-                    tab === t.key ? "bg-brand text-[#1a1408]" : "text-muted hover:bg-brand/10 hover:text-foreground"
-                  }`}
-                >
-                  <span>{t.label}</span>
-                  <span className="text-[13px] font-semibold tabular-nums">
-                    {counts[t.key]}
-                    {tabsWithNew.has(t.key) && <span className="ml-0.5 align-super text-[9px]" aria-label="has new deals">●</span>}
-                  </span>
-                </button>
-              ))}
-            </nav>
-
-            <div className="flex gap-2 py-3">
-              <input
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search watch, ref or seller…"
-                className="min-w-0 flex-1 rounded-xl border border-border bg-card px-4 py-2.5 font-mono text-[13px] text-foreground outline-none placeholder:text-muted focus:border-brand"
-              />
+      <div className="min-h-screen bg-background text-foreground" style={{ paddingBottom: "calc(6.5rem + env(safe-area-inset-bottom))" }}>
+        <header className="sticky top-0 z-20 border-b border-border bg-chrome backdrop-blur-md">
+          <div className="mx-auto max-w-5xl px-4 pb-3 pt-4">
+            <div className="flex items-end justify-between gap-3">
+              <div className="min-w-0">
+                <p className="font-mono text-[11px] uppercase tracking-[0.14em] text-muted">
+                  Reddit · eBay{lastScan ? ` · updated ${lastScan}` : ""}
+                </p>
+                <h1 className="mt-0.5 font-serif text-[34px] leading-none tracking-tight">
+                  Watch <em className="text-brand">deals</em>
+                </h1>
+              </div>
               <button
                 onClick={checkNow}
                 disabled={scanning}
-                className="flex-shrink-0 rounded-xl border border-brand/50 px-3.5 py-2.5 font-mono text-[12px] text-brand transition-colors duration-150 hover:bg-brand/10 disabled:opacity-60"
+                className="flex flex-shrink-0 items-center gap-1.5 rounded-2xl bg-brand px-4 py-2.5 text-[13px] font-medium text-on-brand transition-colors duration-150 hover:bg-brand-hover disabled:opacity-60"
               >
-                {scanning ? "Checking…" : "↻ Check now"}
+                <span className={scanning ? "inline-block animate-spin" : ""} aria-hidden>
+                  ↻
+                </span>
+                {scanning ? "Checking…" : "Check now"}
               </button>
             </div>
-            {scanNote && <p className="-mt-1 pb-3 font-mono text-[11px] text-muted">{scanNote}</p>}
+
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search watch, reference or seller"
+              aria-label="Search deals"
+              className="mt-3 w-full rounded-2xl border border-border bg-card px-4 py-2.5 text-[14px] outline-none placeholder:text-muted focus:border-brand"
+            />
+            {scanNote && <p className="mt-2 text-[12px] leading-snug text-muted">{scanNote}</p>}
           </div>
         </header>
 
-        <main className="mx-auto max-w-2xl px-4 pb-10 pt-4">
-          <p className="mb-3 text-[13px] leading-relaxed text-muted">{blurb}</p>
+        <main className="mx-auto max-w-5xl px-4 pt-5">
+          <p className="font-mono text-[11px] uppercase tracking-[0.14em] text-brand">{activeTab.label}</p>
+          <p className="mt-1 max-w-2xl text-[14px] leading-relaxed text-muted">{activeTab.blurb}</p>
 
-          <div className="mb-4 flex items-center justify-between gap-3">
-            <p className="font-mono text-[11px] text-muted">
-              {newInTab > 0 ? <span className="text-brand">{newInTab} new since your last visit</span> : lastVisit > 0 ? "Nothing new here since your last visit" : ""}
-            </p>
-            <div className="flex flex-shrink-0 rounded-full border border-border bg-card p-0.5" role="group" aria-label="Sort">
+          <div className="mt-4 flex items-center justify-between gap-3 border-b border-border">
+            <div className="flex gap-5" role="group" aria-label="Sort">
               {(["newest", "best"] as Sort[]).map((s) => (
                 <button
                   key={s}
                   onClick={() => pickSort(s)}
                   aria-pressed={sort === s}
-                  className={`rounded-full px-3 py-1 font-mono text-[11px] transition-colors duration-150 ${
-                    sort === s ? "bg-brand text-[#1a1408]" : "text-muted hover:bg-brand/10 hover:text-foreground"
+                  className={`-mb-px border-b-2 pb-2 text-[14px] transition-colors duration-150 ${
+                    sort === s ? "border-brand font-medium text-foreground" : "border-transparent text-muted hover:text-foreground"
                   }`}
                 >
                   {s === "newest" ? "Newest" : "Best"}
                 </button>
               ))}
             </div>
+            <p className="pb-2 font-mono text-[11px] text-muted">
+              {newInTab > 0 ? <span className="text-brand">{newInTab} new since last visit</span> : lastVisit > 0 ? "Nothing new since last visit" : ""}
+            </p>
           </div>
 
-          {loading ? (
-            <div className="flex flex-col gap-3">
-              {Array.from({ length: 4 }).map((_, i) => (
-                <div
-                  key={i}
-                  className="h-[210px] rounded-2xl border border-border bg-card"
-                  style={{ animation: "pulse-soft 1.6s ease-in-out infinite", animationDelay: `${i * 60}ms` }}
-                />
-              ))}
-            </div>
-          ) : error ? (
-            <Empty title="Couldn't load deals" note={error} />
-          ) : rows.length === 0 ? (
-            <Empty
-              title={q ? "Nothing matches that search" : "Nothing here right now"}
-              note={
-                q
-                  ? "Try a brand, a reference number, or a seller's username."
-                  : "Tap “Check now” to pull the latest posts. The site also checks on its own once a day."
-              }
-            />
-          ) : (
-            <div className="flex flex-col gap-3">
-              {visibleRows.map((d) => (
-                <DealRow
-                  key={`${d.source}:${d.id}`}
-                  deal={d}
-                  hidden={hidden.has(`${d.source}:${d.id}`)}
-                  onToggleHide={() => toggleHide(d)}
-                  onMarkSold={() => markSold(d)}
-                  isNew={isNew(d)}
-                />
-              ))}
-            </div>
-          )}
+          <div className="mt-5">
+            {loading ? (
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                {Array.from({ length: 6 }).map((_, i) => (
+                  <div
+                    key={i}
+                    className="h-[420px] rounded-2xl border border-border bg-card"
+                    style={{ animation: "pulse-soft 1.6s ease-in-out infinite", animationDelay: `${i * 60}ms` }}
+                  />
+                ))}
+              </div>
+            ) : error ? (
+              <Empty title="Couldn't load deals" note={error} />
+            ) : rows.length === 0 ? (
+              <Empty
+                title={q ? "Nothing matches that search" : "Nothing here right now"}
+                note={
+                  q
+                    ? "Try a brand, a reference number, or a seller's username."
+                    : "Tap “Check now” to pull the latest posts. The site also checks on its own once a day."
+                }
+              />
+            ) : (
+              <motion.div
+                key={`${tab}:${sort}`}
+                initial="hidden"
+                animate="show"
+                variants={{ hidden: {}, show: { transition: { staggerChildren: reduceMotion ? 0 : 0.06 } } }}
+                className="grid grid-cols-1 items-start gap-4 sm:grid-cols-2 lg:grid-cols-3"
+              >
+                {visibleRows.map((d) => (
+                  <DealRow
+                    key={`${d.source}:${d.id}`}
+                    deal={d}
+                    hidden={hidden.has(`${d.source}:${d.id}`)}
+                    onToggleHide={() => toggleHide(d)}
+                    onMarkSold={() => markSold(d)}
+                    isNew={isNew(d)}
+                  />
+                ))}
+              </motion.div>
+            )}
+          </div>
 
           {!loading && !error && visibleRows.length < rows.length && (
             <button
               onClick={() => setShowAll(true)}
-              className="mt-4 w-full rounded-xl border border-brand/40 py-2.5 font-mono text-[12px] text-brand transition-colors duration-150 hover:bg-brand/10"
+              className="mx-auto mt-5 block w-full max-w-sm rounded-2xl border border-brand/40 py-2.5 text-[13px] font-medium text-brand transition-colors duration-150 hover:bg-brand-dim"
             >
               Show {rows.length - visibleRows.length} more
             </button>
@@ -397,7 +398,7 @@ export default function Dashboard() {
           {!loading && !error && hiddenInTab + skippedInTab > 0 && (
             <button
               onClick={() => setShowHidden((v) => !v)}
-              className="mt-5 w-full rounded-xl border border-border py-2.5 font-mono text-[12px] text-muted transition-colors duration-150 hover:bg-brand/10 hover:text-foreground"
+              className="mx-auto mt-3 block w-full max-w-sm rounded-2xl py-2 text-[13px] text-muted transition-colors duration-150 hover:bg-brand-dim hover:text-foreground"
             >
               {showHidden
                 ? "Tuck them away again"
@@ -405,23 +406,73 @@ export default function Dashboard() {
             </button>
           )}
 
-          <p className="mt-6 font-mono text-[11px] leading-relaxed text-muted">
-            For research only: nothing is bought or messaged for you. Prices compare against other sellers&apos; asks
-            on WatchRecon (Reddit, WUS and more), not sold prices. Reddit can&apos;t be checked from the site, so a
-            post may have sold or been deleted — tap Open post before messaging.
+          <p className="mt-8 max-w-2xl text-[12px] leading-relaxed text-muted">
+            For research only: nothing is bought or messaged for you. Resale estimates are 93% of what other sellers ask on
+            WatchRecon (Reddit, WUS and more). Reddit posts are re-checked for sold or deleted every 30 minutes when the
+            checker is on; still, open the post before messaging.
           </p>
         </main>
+
+        <nav
+          aria-label="Deal type"
+          className="fixed inset-x-0 bottom-0 z-30 px-3"
+          style={{ paddingBottom: "calc(0.75rem + env(safe-area-inset-bottom))" }}
+        >
+          <div className="mx-auto grid max-w-md grid-cols-5 gap-1 rounded-2xl border border-border bg-chrome p-1.5 shadow-[0_8px_30px_rgba(0,0,0,0.25)] backdrop-blur-md">
+            {TABS.map((t) => {
+              const active = tab === t.key;
+              return (
+                <button
+                  key={t.key}
+                  onClick={() => pickTab(t.key)}
+                  aria-current={active ? "page" : undefined}
+                  className={`relative flex flex-col items-center gap-0.5 rounded-xl py-1.5 transition-colors duration-150 ${
+                    active ? "bg-brand-dim text-brand" : "text-muted hover:bg-brand-dim hover:text-foreground"
+                  }`}
+                >
+                  <TabIcon tab={t.key} />
+                  <span className="text-[10.5px] font-medium leading-none">{t.label}</span>
+                  <span className="font-mono text-[10px] leading-none tabular-nums opacity-80">{counts[t.key]}</span>
+                  {tabsWithNew.has(t.key) && (
+                    <span className="absolute right-2 top-1.5 h-1.5 w-1.5 rounded-full bg-brand" aria-label="has new deals" />
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </nav>
       </div>
     </>
   );
 }
 
+/** Small line icons for the bottom tab bar. */
+function TabIcon({ tab }: { tab: Tab }) {
+  const paths: Record<Tab, React.ReactNode> = {
+    flips: <path d="M3 17l6-6 4 4 8-8M15 7h6v6" />,
+    cheap: <path d="M20.6 13.4l-7.2 7.2a2 2 0 01-2.8 0L3 13V3h10l7.6 7.6a2 2 0 010 2.8zM7.5 7.5h.01" />,
+    lowball: <path d="M12 5v14M5 12l7 7 7-7" />,
+    micro: <path d="M12 3l2.6 5.6L20 9.3l-4 4 1 5.7-5-2.8-5 2.8 1-5.7-4-4 5.4-.7z" />,
+    collection: (
+      <>
+        <circle cx="12" cy="12" r="6" />
+        <path d="M12 9v3l2 1.5M9 3h6M9 21h6" />
+      </>
+    ),
+  };
+  return (
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      {paths[tab]}
+    </svg>
+  );
+}
+
 function Empty({ title, note }: { title: string; note: string }) {
   return (
-    <div className="flex flex-col items-center gap-2.5 rounded-2xl border border-border bg-card px-6 py-14 text-center">
-      <div className="mb-1 flex h-14 w-14 items-center justify-center rounded-full bg-brand/10 text-2xl">⌚</div>
-      <h2 className="font-serif text-lg text-foreground">{title}</h2>
-      <p className="max-w-sm text-sm text-muted">{note}</p>
+    <div className="flex flex-col items-center gap-2.5 rounded-2xl border border-border bg-card px-6 py-16 text-center">
+      <div className="mb-2 flex h-16 w-16 items-center justify-center rounded-full bg-brand-dim text-2xl shadow-[0_0_0_10px_var(--brand-dim)]">⌚</div>
+      <h2 className="font-serif text-2xl">{title}</h2>
+      <p className="max-w-sm text-[14px] text-muted">{note}</p>
     </div>
   );
 }

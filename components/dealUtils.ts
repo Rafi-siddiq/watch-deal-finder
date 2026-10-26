@@ -34,6 +34,11 @@ export function maybeSold(deal: Deal, now = Date.now()): boolean {
   return hours !== undefined && hours >= (sellsFast(deal) ? 12 : 7 * 24);
 }
 
+/** The GitHub checker confirmed this Reddit post is still up within the last 3 hours. */
+export function recentlyVerified(deal: Deal, now = Date.now()): boolean {
+  return Boolean(deal.redditCheckedAt) && now - (deal.redditCheckedAt ?? 0) < 3 * 3_600_000;
+}
+
 /** "3h ago" / "2d ago" for when the seller last posted. */
 export function postedAgo(deal: Deal, now = Date.now()): string | undefined {
   const hours = hoursSincePosted(deal, now);
@@ -43,11 +48,11 @@ export function postedAgo(deal: Deal, now = Date.now()): string | undefined {
 
 export type AgeTier = Deal["ageTier"];
 
-export const AGE_META: Record<AgeTier, { label: string; className: string }> = {
-  fresh: { label: "Fresh", className: "text-teal border-teal/40" },
-  aging: { label: "Aging", className: "text-brand-hover border-brand/40" },
-  stale: { label: "Stale", className: "text-[#d9a441] border-[#d9a441]/50" },
-  ancient: { label: "Ancient", className: "text-rust border-rust/60" },
+export const AGE_META: Record<AgeTier, { label: string }> = {
+  fresh: { label: "Fresh" },
+  aging: { label: "Aging" },
+  stale: { label: "Stale" },
+  ancient: { label: "Ancient" },
 };
 
 /** Deeper lowball for older listings — Ancient scales down further than Stale. */

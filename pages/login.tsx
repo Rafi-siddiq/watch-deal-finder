@@ -41,11 +41,11 @@ export default function Login() {
           onSubmit={submit}
           className="w-full max-w-sm rounded-2xl border border-border bg-card p-7"
         >
-          <p className="mb-1 font-mono text-[11px] uppercase tracking-[0.16em] text-muted">
+          <p className="mb-1 font-mono text-[11px] uppercase tracking-[0.14em] text-muted">
             Watch Deal Finder
           </p>
-          <h1 className="mb-7 font-serif text-2xl font-medium tracking-tight text-foreground">
-            Enter PIN
+          <h1 className="mb-7 font-serif text-[34px] leading-none tracking-tight">
+            Enter your <em className="text-brand">PIN</em>
           </h1>
           <input
             type="password"
@@ -54,15 +54,15 @@ export default function Login() {
             value={pin}
             onChange={(e) => setPin(e.target.value)}
             placeholder="••••"
-            className="mb-3 w-full rounded-xl border border-border bg-background px-4 py-3 font-mono text-base tabular-nums text-foreground outline-none focus:border-brand"
+            className="mb-3 w-full rounded-2xl border border-border bg-background px-4 py-3 font-mono text-base tabular-nums text-foreground outline-none focus:border-brand"
           />
-          {error && <p className="mb-3 text-sm text-[#c4665f]">{error}</p>}
+          {error && <p className="mb-3 text-sm text-danger">{error}</p>}
           <button
             type="submit"
             disabled={busy || !pin}
-            className="w-full rounded-xl bg-brand px-4 py-3 font-medium text-[#1a1408] transition-colors hover:bg-brand-hover disabled:opacity-50"
+            className="w-full rounded-2xl bg-brand px-4 py-3 font-medium text-on-brand transition-colors duration-150 hover:bg-brand-hover disabled:opacity-50"
           >
-            {busy ? "Checking…" : "Unlock dashboard"}
+            {busy ? "Checking…" : "Unlock"}
           </button>
         </form>
       </main>

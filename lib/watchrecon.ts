@@ -19,6 +19,8 @@ const PRICE_MAX = 8000;
 /** Reddit resale: ~3.5% PayPal G&S fee + ~$30 insured shipping. */
 const SALE_KEEP = 0.965;
 const SALE_COST = 30;
+/** Comps are other sellers' asks; watches sell a little under ask, so profit math uses 93% of the median ask. */
+const ASK_TO_SALE = 0.93;
 /** Target profit for a lowball buy (the user's flip goal). */
 const LOWBALL_TARGET_NET = 400;
 /** A listing must have been up this long (across reposts) to be lowball-able. */
@@ -152,24 +154,42 @@ export function refOf(t: string): string | null {
   return /^(19|20)\d\d$/.test(r) ? null : r;
 }
 
-/** Median of other sellers' asks for a reference (all time), cached 24h. */
-async function compFor(ref: string, seller: string): Promise<{ n: number; med: number } | null> {
-  const key = `wr:comp:${ref}`;
-  const cached = await redis().get<{ n: number; med: number } | "none">(key);
-  if (cached) return cached === "none" ? null : cached;
+/** A brand slug ("audemars-piguet") appears in a title ("Audemars Piguet Royal Oak 15210"). */
+function titleHasBrand(title: string, slug: string): boolean {
+  const norm = (x: string) => ` ${x.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim()} `;
+  return slug !== "" && norm(title).includes(norm(slug.replace(/-/g, " ")));
+}
 
-  const re = new RegExp(ref.replace(/[.]/g, "\\.?").replace(/-/g, "-?"), "i");
-  const prices: number[] = [];
-  for (let p = 1; p <= 3; p++) {
-    const items = await get({ query: ref, last_days: 0, price_start: PRICE_MIN, price_end: 30000, current_page: p });
-    for (const i of items) if (i.price && re.test(i.title) && !NOT_WATCH.test(i.title) && i.user !== seller) prices.push(i.price);
-    if (items.length < 50) break;
-    await sleep(400);
+/**
+ * Median of other sellers' asks for a reference (all time), from the same brand only:
+ * reference numbers collide across brands (Rolex 15210 vs Audemars Piguet 15210).
+ * Raw asks are cached 24h per reference; the brand/seller filtering happens per listing.
+ */
+async function compFor(ref: string, seller: string, title: string): Promise<{ n: number; med: number } | null> {
+  const key = `wr:comp2:${ref}`;
+  let asks = await redis().get<[number, string, string][]>(key);
+  if (!asks) {
+    // Digit boundaries so 15210 doesn't match 115210; letters may prefix (M79360N vs 79360N).
+    const re = new RegExp(`(?<![0-9])${ref.replace(/[.]/g, "\\.?").replace(/-/g, "-?")}(?![0-9])`, "i");
+    asks = [];
+    for (let p = 1; p <= 3; p++) {
+      const items = await get({ query: ref, last_days: 0, price_start: PRICE_MIN, price_end: 30000, current_page: p });
+      for (const i of items) if (i.price && re.test(i.title) && !NOT_WATCH.test(i.title)) asks.push([i.price, i.user, i.brand.toLowerCase()]);
+      if (items.length < 50) break;
+      await sleep(400);
+    }
+    await redis().set(key, asks, { ex: DAY_MS / 1000 });
   }
-  prices.sort((a, b) => a - b);
-  const comp = prices.length >= 4 ? { n: prices.length, med: prices[Math.floor((prices.length - 1) / 2)] } : null;
-  await redis().set(key, comp ?? "none", { ex: DAY_MS / 1000 });
-  return comp;
+  const others = asks.filter(([, user]) => user !== seller);
+  const brands = [...new Set(others.map(([, , b]) => b))];
+  let pool = others.filter(([, , b]) => titleHasBrand(title, b));
+  if (pool.length === 0) {
+    // Title doesn't name a brand WatchRecon knows: only trust a comp that's essentially one brand.
+    const top = brands.map((b) => others.filter(([, , x]) => x === b)).sort((a, b2) => b2.length - a.length)[0] ?? [];
+    pool = top.length >= 0.8 * others.length ? top : [];
+  }
+  const prices = pool.map(([p]) => p).sort((a, b) => a - b);
+  return prices.length >= 4 ? { n: prices.length, med: prices[Math.floor((prices.length - 1) / 2)] } : null;
 }
 
 const NAME_NOISE = new Set(
@@ -309,7 +329,7 @@ type Comp = { resale: number; basis: string; compCount: number; byName: boolean 
 async function compOf(title: string, seller: string, allowName: boolean): Promise<Comp | null> {
   const ref = refOf(title);
   if (ref) {
-    const c = await compFor(ref, seller);
+    const c = await compFor(ref, seller, title);
     if (c) return { resale: c.med, basis: `${ref} median of ${c.n} asks`, compCount: c.n, byName: false };
   }
   const m = MODEL_COMPS.find(([re]) => re.test(title));
@@ -323,6 +343,8 @@ async function compOf(title: string, seller: string, allowName: boolean): Promis
 
 interface Verdict {
   kind: NonNullable<Deal["kind"]>;
+  /** Likely sale price (asks discounted to what watches actually sell for). */
+  sale: number;
   net: number;
   maxOffer: number;
   score: number;
@@ -334,38 +356,48 @@ interface Verdict {
  */
 function judge(price: number, comp: Comp, title: string, daysUp: number | null, opts: ScanOptions, flagged: boolean): Verdict | null {
   const { resale, byName } = comp;
-  const net = netAt(resale, price);
-  const maxOffer = Math.round(SALE_KEEP * resale - SALE_COST - LOWBALL_TARGET_NET);
-  const microOffer = Math.round(SALE_KEEP * resale - SALE_COST - MICRO_TARGET_NET);
+  // ratio compares to asks (is this priced under the market?); profit uses the likely sale price.
+  const sale = Math.round(resale * ASK_TO_SALE);
+  const net = netAt(sale, price);
+  const maxOffer = Math.round(SALE_KEEP * sale - SALE_COST - LOWBALL_TARGET_NET);
+  const microOffer = Math.round(SALE_KEEP * sale - SALE_COST - MICRO_TARGET_NET);
   const ratio = price / resale;
   const cap = (s: number) => Math.max(0, Math.min(flagged ? 65 : 100, Math.round(s) - (flagged ? 15 : 0)));
   const aged = daysUp !== null && daysUp >= LOWBALL_MIN_DAYS;
 
   // Similar-title comps are good enough to spot a fair price, not to bank a big flip on.
-  if (!byName && net >= opts.minNet) return { kind: "fresh", net, maxOffer, score: cap(60 + net / 25) };
+  if (!byName && net >= opts.minNet) return { kind: "fresh", sale, net, maxOffer, score: cap(60 + net / 25) };
   if (!byName && aged && maxOffer < price && maxOffer >= LOWBALL_MIN_OFFER_RATIO * price) {
-    return { kind: "lowball", net, maxOffer, score: cap(50 + ((maxOffer / price - LOWBALL_MIN_OFFER_RATIO) / (1 - LOWBALL_MIN_OFFER_RATIO)) * 35) };
+    return { kind: "lowball", sale, net, maxOffer, score: cap(50 + ((maxOffer / price - LOWBALL_MIN_OFFER_RATIO) / (1 - LOWBALL_MIN_OFFER_RATIO)) * 35) };
   }
   if (MICRO.test(title)) {
     // Already under market: the ask is the deal, so no "offer up to" (it can be at or below zero on cheap pieces).
-    if (ratio <= MICRO_MAX_RATIO) return { kind: "micro", net, maxOffer: 0, score: cap(60 + (1 - ratio - (1 - MICRO_MAX_RATIO)) * 200) };
+    if (ratio <= MICRO_MAX_RATIO) return { kind: "micro", sale, net, maxOffer: 0, score: cap(60 + (1 - ratio - (1 - MICRO_MAX_RATIO)) * 200) };
     if (aged && microOffer < price && microOffer >= 0.7 * price) {
-      return { kind: "micro", net, maxOffer: microOffer, score: cap(50 + ((microOffer / price - 0.7) / 0.3) * 30) };
+      return { kind: "micro", sale, net, maxOffer: microOffer, score: cap(50 + ((microOffer / price - 0.7) / 0.3) * 30) };
     }
   }
   if (price <= opts.cheapMax) {
     // Small flips (your Beaubleu/Feynman range): $150+ at asking, or an offer on a stale listing that nets $250.
     // Similar-title comps are looser, so they must also show a real gap.
-    const cheapOffer = Math.round(SALE_KEEP * resale - SALE_COST - CHEAP_TARGET_NET);
-    if (net >= CHEAP_MIN_NET && (!byName || ratio <= 0.85)) return { kind: "cheap", net, maxOffer: 0, score: cap(60 + net / 10) };
+    const cheapOffer = Math.round(SALE_KEEP * sale - SALE_COST - CHEAP_TARGET_NET);
+    if (net >= CHEAP_MIN_NET && (!byName || ratio <= 0.85)) return { kind: "cheap", sale, net, maxOffer: 0, score: cap(60 + net / 10) };
     if (daysUp !== null && daysUp >= CHEAP_MIN_DAYS && cheapOffer < price && cheapOffer >= CHEAP_MIN_OFFER_RATIO * price) {
-      return { kind: "cheap", net, maxOffer: cheapOffer, score: cap(50 + ((cheapOffer / price - CHEAP_MIN_OFFER_RATIO) / (1 - CHEAP_MIN_OFFER_RATIO)) * 35) };
+      return { kind: "cheap", sale, net, maxOffer: cheapOffer, score: cap(50 + ((cheapOffer / price - CHEAP_MIN_OFFER_RATIO) / (1 - CHEAP_MIN_OFFER_RATIO)) * 35) };
     }
   }
   if (price <= opts.collectionMax && ratio <= COLLECTION_MAX_RATIO && isSmall(title) && !OWNED.test(title)) {
-    return { kind: "collection", net, maxOffer, score: cap(60 + (1 - ratio - (1 - COLLECTION_MAX_RATIO)) * 200) };
+    return { kind: "collection", sale, net, maxOffer, score: cap(60 + (1 - ratio - (1 - COLLECTION_MAX_RATIO)) * 200) };
   }
   return null;
+}
+
+/**
+ * Price the card compares against: what others ask for collection/micro picks (is it a fair
+ * price?), the likely sale price for flips (what you'd actually get reselling).
+ */
+function shownPrice(v: Verdict, comp: Comp): number {
+  return v.kind === "collection" || v.kind === "micro" ? comp.resale : v.sale;
 }
 
 /** Profit shown on the card: at asking, or the target an offer is sized to hit. */
@@ -473,7 +505,7 @@ export async function scanWatchRecon(opts: ScanOptions): Promise<ScanResult> {
       brand: l.brand || (l.title.split(/\s+/)[0] ?? ""),
       imageUrl: l.imageUrl,
       model: ref ?? "",
-      median: comp.resale,
+      median: shownPrice(v, comp),
       discount: Math.max(0, 1 - l.price / comp.resale),
       score: v.score,
       scoreModifier: 1,
@@ -561,7 +593,7 @@ export async function scanEbay(listings: RawListing[], opts: ScanOptions): Promi
       brand: l.title.split(/\s+/)[0] ?? "",
       imageUrl: l.imageUrl,
       model: ref ?? "",
-      median: comp.resale,
+      median: shownPrice(v, comp),
       discount: Math.max(0, 1 - total / comp.resale),
       score: v.score,
       scoreModifier: 1,

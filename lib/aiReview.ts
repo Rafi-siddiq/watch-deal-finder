@@ -93,7 +93,7 @@ Missing information is NOT a red flag: no post text, unknown trade count, or an 
 "note" is one plain sentence of at most 25 words the buyer can act on, e.g. "Comp mixes the 41mm; this 36mm midsize sells nearer $1,800, so the profit is thin." For a clean listing, say briefly why it's a good lead.`;
 
 /** Bump when the review instructions change so existing reviews are redone. */
-const PROMPT_VERSION = 4;
+const PROMPT_VERSION = 5;
 
 const FLAG_TYPES = ["wrong_variant", "parts_or_aftermarket", "rough_condition", "scam_pattern", "overpriced", "hard_to_resell"] as const;
 type FlagType = (typeof FLAG_TYPES)[number];
@@ -134,7 +134,7 @@ async function brief(d: Deal): Promise<string> {
     `Deal type: ${d.kind}`,
     `Title: ${d.title}`,
     `Asking: $${d.price}${d.source === "ebay" && d.shippingIncluded !== undefined ? ` (includes $${d.shippingIncluded} shipping)` : ""}`,
-    `Comparison: ~$${d.median} — ${d.compBasis ?? "unknown basis"}`,
+    `Comparison: ~$${d.median} ${d.kind === "collection" || d.kind === "micro" ? "(what other sellers ask)" : "(likely sale price: 93% of the median ask)"} — ${d.compBasis ?? "unknown basis"}`,
     d.kind === "lowball" || ((d.kind === "micro" || d.kind === "cheap") && (d.maxOffer ?? 0) >= 0.5 * d.price)
       ? `Max offer that still hits the profit target: $${d.maxOffer}`
       : d.kind === "collection" || d.kind === "micro"

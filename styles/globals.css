@@ -1,17 +1,34 @@
 @import "tailwindcss";
 
-/* Watch Deal Finder — editorial dark theme. */
+/* Watch Deal Finder — warm surfaces, teal accent. Light by default, dark via system setting. */
 :root {
-  --background: #0a0a08;
-  --foreground: #f2f0ea;
-  --card: #141410;
-  --card-hover: #191914;
-  --border: #232019;
-  --muted: #8f8b7d;
-  --brand: #cdae6d;       /* brass — score / primary accent */
-  --brand-hover: #dcc084;
-  --teal: #5a9a9a;        /* eBay tag */
-  --rust: #b8825a;        /* Reddit tag */
+  --background: #faf9f7;
+  --foreground: #1a1a1a;
+  --card: #ffffff;
+  --card-hover: #f5f4f2;
+  --border: #e7e4de;
+  --muted: #6f6b62;
+  --brand: #0d9488;
+  --brand-hover: #14b8a6;
+  --brand-dim: rgba(13, 148, 136, 0.1);
+  --on-brand: #f5f5f0;
+  --success: #10b981;
+  --warning: #f59e0b;
+  --danger: #e11d48;
+  --chrome: rgba(250, 249, 247, 0.92);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0a0a08;
+    --foreground: #f5f5f0;
+    --card: #1a1a14;
+    --card-hover: #1f1f18;
+    --border: #2a2a22;
+    --muted: #9a968a;
+    --brand-dim: rgba(20, 184, 166, 0.12);
+    --chrome: rgba(10, 10, 8, 0.9);
+  }
 }
 
 @theme inline {
@@ -23,23 +40,40 @@
   --color-muted: var(--muted);
   --color-brand: var(--brand);
   --color-brand-hover: var(--brand-hover);
-  --color-teal: var(--teal);
-  --color-rust: var(--rust);
+  --color-brand-dim: var(--brand-dim);
+  --color-on-brand: var(--on-brand);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+  --color-chrome: var(--chrome);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
-  --font-serif: var(--font-source-serif);
+  --font-serif: var(--font-instrument-serif);
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
   font-family: var(--font-sans), system-ui, sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
 }
 
-a { color: var(--brand); }
-a:hover { color: var(--brand-hover); }
+a {
+  color: inherit;
+  text-decoration: none;
+}
 
 @keyframes pulse-soft {
   0%, 100% { opacity: 0.5; }
   50% { opacity: 0.9; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }
