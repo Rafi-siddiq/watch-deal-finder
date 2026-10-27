@@ -23,7 +23,7 @@ function redis(): Redis {
 
 const SEEN_TTL_SECONDS = 30 * 24 * 60 * 60; // 30 days
 const DEALS_KEY = "deals:store"; // hash: field = "{source}:{id}" -> Deal JSON
-const DEALS_MAX = 200; // cap returned to the dashboard
+const DEALS_MAX = 400; // cap returned to the dashboard (a full sweep finds ~270 Reddit + eBay deals)
 // Scanner deals are re-confirmed every 12h while the post is live (or reposted) and
 // eBay items are re-checked every 6h, so one unseen for 7 days is gone.
 const WR_PRUNE_MS = 7 * 24 * 60 * 60 * 1000;
