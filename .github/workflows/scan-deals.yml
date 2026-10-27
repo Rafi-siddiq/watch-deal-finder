@@ -52,6 +52,9 @@ jobs:
           EBAY_CLIENT_SECRET: ${{ secrets.EBAY_CLIENT_SECRET }}
           MIN_NET_PROFIT: ${{ secrets.MIN_NET_PROFIT }}
           MAX_PURCHASE_PRICE: ${{ secrets.MAX_PURCHASE_PRICE }}
+          # Optional Reddit app keys: removes sold/deleted posts each run (anonymous Reddit blocks GitHub too).
+          REDDIT_CLIENT_ID: ${{ secrets.REDDIT_CLIENT_ID }}
+          REDDIT_CLIENT_SECRET: ${{ secrets.REDDIT_CLIENT_SECRET }}
           SCAN_MODE: ${{ inputs.full && 'full' || '' }}
         run: npx -y tsx@4.19.2 scripts/scan-actions.ts
       - name: AI review of new deals
