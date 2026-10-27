@@ -1,14 +1,16 @@
-# Runs the deal scan here every 15 minutes (Vercel's free plan only allows a daily cron, and
-# its 60s limit only fits part of a sweep). Each run reads the newest r/WE + r/watch_swap posts;
-# every 3h it sweeps the whole 14-day window; eBay at most hourly. Then it asks the site to
-# AI-review whatever is new. Needs repo secrets UPSTASH_REDIS_REST_URL / _TOKEN (eBay keys,
-# CRON_SECRET and APP_URL optional); without the Upstash ones it skips quietly.
+# Runs the deal scan here (Vercel's free plan only allows a daily cron, and its 60s limit
+# only fits part of a sweep). GitHub runs frequent schedules hours late, so each run loops
+# for ~5.5h scanning every 15 minutes, then starts its own replacement; the schedule below
+# is only a watchdog that restarts the loop if it ever stops. Each cycle reads the newest
+# r/WE + r/watch_swap posts; every 3h it sweeps the whole 14-day window; eBay at most hourly;
+# then it asks the site to AI-review whatever is new. Needs repo secrets
+# UPSTASH_REDIS_REST_URL / _TOKEN (eBay, Reddit, CRON_SECRET and APP_URL optional).
 # Run workflow with "full" ticked to force a full sweep now.
 name: scan-deals
 
 on:
   schedule:
-    - cron: "*/15 * * * *"
+    - cron: "17 */2 * * *"
   workflow_dispatch:
     inputs:
       full:
@@ -16,14 +18,19 @@ on:
         type: boolean
         default: false
 
+# One loop at a time; a watchdog run that fires mid-loop waits, and only the newest waiting run is kept.
 concurrency:
   group: scan-deals
   cancel-in-progress: false
 
+permissions:
+  actions: write
+  contents: read
+
 jobs:
   scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 355
     env:
       UPSTASH_REDIS_REST_URL: ${{ secrets.UPSTASH_REDIS_REST_URL }}
       UPSTASH_REDIS_REST_TOKEN: ${{ secrets.UPSTASH_REDIS_REST_TOKEN }}
@@ -45,9 +52,11 @@ jobs:
           cache: npm
       - run: npm ci --no-audit --no-fund
         if: steps.gate.outputs.ok
-      - name: Scan
+      - name: Scan every 15 minutes for ~5.5h
         if: steps.gate.outputs.ok
         env:
+          LOOP_MINUTES: "320"
+          CYCLE_MINUTES: "15"
           EBAY_CLIENT_ID: ${{ secrets.EBAY_CLIENT_ID }}
           EBAY_CLIENT_SECRET: ${{ secrets.EBAY_CLIENT_SECRET }}
           MIN_NET_PROFIT: ${{ secrets.MIN_NET_PROFIT }}
@@ -55,13 +64,12 @@ jobs:
           # Optional Reddit app keys: removes sold/deleted posts each run (anonymous Reddit blocks GitHub too).
           REDDIT_CLIENT_ID: ${{ secrets.REDDIT_CLIENT_ID }}
           REDDIT_CLIENT_SECRET: ${{ secrets.REDDIT_CLIENT_SECRET }}
-          SCAN_MODE: ${{ inputs.full && 'full' || '' }}
-        run: npx -y tsx@4.19.2 scripts/scan-actions.ts
-      - name: AI review of new deals
-        if: steps.gate.outputs.ok
-        env:
           APP_URL: ${{ secrets.APP_URL }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
-        run: |
-          if [ -z "$APP_URL" ] || [ -z "$CRON_SECRET" ]; then echo "APP_URL / CRON_SECRET not set; skipping review."; exit 0; fi
-          curl -sS -m 90 -H "Authorization: Bearer $CRON_SECRET" "$APP_URL/api/cron/review-deals" || echo "review call failed (non-fatal)"
+          SCAN_MODE: ${{ inputs.full && 'full' || '' }}
+        run: npx -y tsx@4.19.2 scripts/scan-actions.ts
+      - name: Start the next loop
+        if: success() && steps.gate.outputs.ok
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X POST "repos/${{ github.repository }}/actions/workflows/scan-deals.yml/dispatches" -f ref=main
