@@ -72,7 +72,8 @@ const VINTAGE = /\bvintage\b|\b19[4-8]\d\b|pie ?pan|\bcal\.? ?[3-7]\d\d\b|\bbump
 const VINTAGE_HAIRCUT = 0.75;
 
 /** Variants that price very differently from the base model: similar-title comps must agree on each. */
-const VARIANT_WORDS = [/quartz/i, /chrono(graph)?\b/i, /\bgmt\b/i, /moon ?phase/i, /\b(?:18k|14k|solid gold|rose gold|yellow gold)\b/i, /\bdiamonds?\b/i];
+// TAG chronographs are often listed by calibre, name or ref (Carrera Calibre 16, Glassbox, Heuer 02, CV2010) without "chrono".
+const VARIANT_WORDS = [/quartz/i, /chrono(graph)?\b|\bcalibre ?(?:1[167]|1887|36)\b|\bheuer ?0[12]\b|glass ?box|seafarer|\b(?:cv|cb[a-z]|ca[ryz])\d/i, /\bgmt\b/i, /moon ?phase/i, /\b(?:18k|14k|solid gold|rose gold|yellow gold)\b/i, /\bdiamonds?\b/i];
 const variantSig = (t: string) => VARIANT_WORDS.map((re) => (re.test(t) ? 1 : 0)).join("");
 
 /** Fallback resale for popular models usually listed without a reference (r/WE asks, Oct 2026). */
@@ -257,7 +258,7 @@ async function compByName(l: WrListing): Promise<{ n: number; med: number } | nu
   const tokens = nameTokens(l.title);
   if (tokens.length < 3) return null;
   const sig = variantSig(l.title);
-  const key = `wr:ncomp2:${tokens.join("-")}:${sig}`;
+  const key = `wr:ncomp3:${tokens.join("-")}:${sig}`;
   const cached = await redis().get<{ n: number; med: number } | "none">(key);
   if (cached) return cached === "none" ? null : cached;
 
@@ -266,7 +267,7 @@ async function compByName(l: WrListing): Promise<{ n: number; med: number } | nu
   const items = await get({ query: tokens.filter((w) => !/mm$/.test(w)).slice(0, 3).join(" "), last_days: 0, price_start: PRICE_MIN, price_end: 30000 });
   const prices = items
     .filter((i) => {
-      if (!i.price || i.user === l.user || NOT_WATCH.test(i.title) || variantSig(i.title) !== sig) return false;
+      if (!i.price || i.user === l.user || NOT_WATCH.test(i.title) || variantSig(i.title) !== sig || !sameLine(l.title, i.title)) return false;
       const other = caseSizeOf(i.title);
       if (mm !== undefined && other !== undefined && Math.abs(mm - other) > 1) return false;
       const have = new Set(nameTokens(i.title).concat(i.title.toLowerCase().split(/[^a-z0-9.']+/)));
@@ -277,6 +278,18 @@ async function compByName(l: WrListing): Promise<{ n: number; med: number } | nu
   const comp = prices.length >= 4 ? { n: prices.length, med: prices[Math.floor((prices.length - 1) / 2)] } : null;
   await redis().set(key, comp ?? "none", { ex: DAY_MS / 1000 });
   return comp;
+}
+
+/** Letter prefix of a reference, which names the line on brands like TAG (WAP = Aquaracer quartz, WV = Carrera 3-hand, CV = Carrera chrono). */
+export function refLine(ref: string | null): string | null {
+  return ref?.match(/^[A-Z]+(?=\d)/)?.[0] ?? null;
+}
+
+/** Similar-title comps can't mix lines: a WAF1112 quartz Aquaracer isn't priced like a WAY2010 automatic. */
+export function sameLine(title: string, other: string): boolean {
+  const a = refLine(refOf(title));
+  const b = refLine(refOf(other));
+  return !a || !b || a === b;
 }
 
 function titleKey(t: string): Set<string> {
