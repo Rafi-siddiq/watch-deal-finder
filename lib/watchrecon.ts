@@ -20,6 +20,8 @@ const MAX_PAGES = 60;
 /** Pages read every run (about the last day of r/WE), plus older pages read in rotation. */
 const NEWEST_PAGES = 6;
 const OLDER_PAGES_PER_RUN = 12;
+/** Pages read per subreddit by a quick "newest" sweep (~10h of r/WE): catches fresh posts within minutes. */
+const QUICK_PAGES = 2;
 
 /** Reddit resale: ~3.5% PayPal G&S fee + ~$30 insured shipping. */
 const SALE_KEEP = 0.965;
@@ -61,6 +63,18 @@ function isSmall(title: string): boolean {
 const NOT_WATCH = /^\W*(?:\[[^\]]*\]\s*)*(?:oem\s+|original\s+|genuine\s+)?(?:strap|bracelet|band|end ?links?|clasp|buckle|deployant|bezel insert)\b|\b(?:strap|bracelet|band|box|dial|movement|parts|links?) only\b|\b(?:straps?|bracelets?|bands?)\s+(?:for|fits?)\b|\b(?:strap|bracelet|band)\s*[-–]?\s*\d{2}\s?mm\b|\bbader\b|strapcode|\bbx\d{3}\b|\bwatch strap\b|\bsilencer\b|\breplacement\b|\bfor parts\b|\blot of\b|\bwtb\b|^\W*\[wtt\](?!.*\bwts\b)|aftermarket|a-m dial|redial|homage/i;
 const ACCOUNT_BLOCKLIST = /^(Motor-Special6097|Consistent-Sir629|Evening-Quit-6836|Rosspring|Kwinka000|Local_Abrocoma_749|otf_santos|Legitimate_Box_7803|StatisticianDry2101|deFischer94|Holden-DHLuxuryTime)$/i;
 
+/**
+ * Vintage asks on r/WE run well above what these actually sell for (a 1971 Constellation
+ * C-Case comped at ~$1,100 from Reddit asks sells for $500-600 on eBay), so their comps
+ * get a haircut and the card says to check eBay sold first.
+ */
+const VINTAGE = /\bvintage\b|\b19[4-8]\d\b|pie ?pan|\bcal\.? ?[3-7]\d\d\b|\bbumper\b|crosshair|\bc-?case\b|king seiko|lord marvel|\b61gs\b/i;
+const VINTAGE_HAIRCUT = 0.75;
+
+/** Variants that price very differently from the base model: similar-title comps must agree on each. */
+const VARIANT_WORDS = [/quartz/i, /chrono(graph)?\b/i, /\bgmt\b/i, /moon ?phase/i, /\b(?:18k|14k|solid gold|rose gold|yellow gold)\b/i, /\bdiamonds?\b/i];
+const variantSig = (t: string) => VARIANT_WORDS.map((re) => (re.test(t) ? 1 : 0)).join("");
+
 /** Fallback resale for popular models usually listed without a reference (r/WE asks, Oct 2026). */
 const MODEL_COMPS: [RegExp, number][] = [
   [/kuoe.*sombrero/i, 725], [/kuoe.*royal smith/i, 650], [/kuoe.*old smith/i, 500],
@@ -99,6 +113,18 @@ function redis(): Redis {
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** Ids evaluated in the last 12h, looked up 200 keys per MGET so a big sweep costs a few Redis commands, not thousands. */
+async function alreadyEvaluated(prefix: string, ids: string[]): Promise<Set<string>> {
+  const unique = [...new Set(ids.filter(Boolean))];
+  const done = new Set<string>();
+  for (let i = 0; i < unique.length; i += 200) {
+    const chunk = unique.slice(i, i + 200);
+    const vals = await redis().mget<(number | null)[]>(...chunk.map((id) => prefix + id));
+    vals.forEach((v, j) => v && done.add(chunk[j]));
+  }
+  return done;
+}
 
 function unesc(s: string): string {
   return s
@@ -225,22 +251,22 @@ function nameTokens(t: string): string[] {
 
 /**
  * Median ask of similar listings (same brand/model words, same size when stated,
- * quartz vs automatic kept apart), other sellers only. Cached 24h.
+ * quartz/chrono/GMT/moonphase/gold/diamond variants kept apart), other sellers only. Cached 24h.
  */
 async function compByName(l: WrListing): Promise<{ n: number; med: number } | null> {
   const tokens = nameTokens(l.title);
   if (tokens.length < 3) return null;
-  const key = `wr:ncomp:${tokens.join("-")}`;
+  const sig = variantSig(l.title);
+  const key = `wr:ncomp2:${tokens.join("-")}:${sig}`;
   const cached = await redis().get<{ n: number; med: number } | "none">(key);
   if (cached) return cached === "none" ? null : cached;
 
-  const quartz = /quartz/i.test(l.title);
   const mm = caseSizeOf(l.title);
   const need = tokens.length >= 4 ? 3 : tokens.length;
   const items = await get({ query: tokens.filter((w) => !/mm$/.test(w)).slice(0, 3).join(" "), last_days: 0, price_start: PRICE_MIN, price_end: 30000 });
   const prices = items
     .filter((i) => {
-      if (!i.price || i.user === l.user || NOT_WATCH.test(i.title) || /quartz/i.test(i.title) !== quartz) return false;
+      if (!i.price || i.user === l.user || NOT_WATCH.test(i.title) || variantSig(i.title) !== sig) return false;
       const other = caseSizeOf(i.title);
       if (mm !== undefined && other !== undefined && Math.abs(mm - other) > 1) return false;
       const have = new Set(nameTokens(i.title).concat(i.title.toLowerCase().split(/[^a-z0-9.']+/)));
@@ -341,8 +367,14 @@ const EBAY_VINTAGE = /\bvintage\b|\bantique\b|\bestate\b|\b19[0-8]\ds?\b|\bpocke
 
 type Comp = { resale: number; basis: string; compCount: number; byName: boolean };
 
-/** Reference comps first, then the model table, then (when allowed) similar titles. */
+/** Reference comps first, then the model table, then (when allowed) similar titles. Vintage comps get a haircut. */
 async function compOf(title: string, seller: string, allowName: boolean): Promise<Comp | null> {
+  const c = await rawCompOf(title, seller, allowName);
+  if (!c || !VINTAGE.test(title)) return c;
+  return { ...c, resale: Math.round(c.resale * VINTAGE_HAIRCUT), basis: `${c.basis}, vintage −${Math.round((1 - VINTAGE_HAIRCUT) * 100)}%` };
+}
+
+async function rawCompOf(title: string, seller: string, allowName: boolean): Promise<Comp | null> {
   const ref = refOf(title);
   if (ref) {
     const c = await compFor(ref, seller, title);
@@ -441,6 +473,11 @@ export interface ScanOptions {
   collectionMax: number;
   /** CHEAP_MAX_PRICE: ceiling for the cheap-flips tab. */
   cheapMax: number;
+  /**
+   * Which WatchRecon pages to read: "rotate" (default, serverless) = newest pages plus a rotating
+   * chunk of older ones; "newest" = just the newest few; "all" = the whole window in one run.
+   */
+  sweep?: "rotate" | "newest" | "all";
 }
 
 export interface ScanResult {
@@ -477,8 +514,13 @@ export async function scanWatchRecon(opts: ScanOptions): Promise<ScanResult> {
     }
     return short;
   };
+  const pageList = (from: number, to: number) => Array.from({ length: Math.max(0, to - from + 1) }, (_, i) => from + i);
   // r/watch_swap first: it is small, so the busy r/Watchexchange can't starve it of time.
   for (const src of [...SOURCES].reverse()) {
+    if (opts.sweep === "newest" || opts.sweep === "all") {
+      await readPages(src, pageList(1, opts.sweep === "newest" ? QUICK_PAGES : pageCap));
+      continue;
+    }
     const newest = Array.from({ length: Math.min(NEWEST_PAGES, pageCap) }, (_, i) => i + 1);
     if (await readPages(src, newest)) continue; // the whole window fit in the newest pages
     const cursorKey = `wr:pages:${src}:${opts.days}`;
@@ -495,6 +537,7 @@ export async function scanWatchRecon(opts: ScanOptions): Promise<ScanResult> {
   let outOfTime = false;
   // WatchRecon lists newest first, so the first post per seller+watch is the live one.
   const seenWatches = new Set<string>();
+  const done = await alreadyEvaluated("wr:eval:", listings.map((l) => l.postId));
 
   for (const l of listings) {
     const wk = watchKey(l);
@@ -507,7 +550,7 @@ export async function scanWatchRecon(opts: ScanOptions): Promise<ScanResult> {
     if (!l.price || NOT_WATCH.test(l.title) || ROUGH.test(l.title) || ACCOUNT_BLOCKLIST.test(l.user)) continue;
 
     const evalKey = `wr:eval:${l.postId}`;
-    if (await redis().get(evalKey)) continue;
+    if (done.has(l.postId)) continue;
     evaluated++;
     judged.push(dealId);
     const allowName = MICRO.test(l.title) || l.price <= opts.cheapMax || (l.price <= opts.collectionMax && isSmall(l.title));
@@ -526,8 +569,11 @@ export async function scanWatchRecon(opts: ScanOptions): Promise<ScanResult> {
     if (l.price < SCAM_RATIO * comp.resale) flags.push(`${Math.round((1 - l.price / comp.resale) * 100)}% under comps — classic scam pattern, vet hard`);
     if (h.totalPosts <= 2 && sellerDays < 30) flags.push("New seller: little or no posting history");
     if (comp.basis === "model table") flags.push("Comp from model table, not live asks — confirm variant/size");
+    const vintage = VINTAGE.test(l.title);
 
+    // Vintage gets a caution note, not the flagged-score penalty: the haircut already priced it in.
     const v = judge(l.price, comp, l.title, daysUp, opts, flags.length > 0);
+    if (vintage) flags.push("Vintage: Reddit asks run high — check eBay sold before offering");
     if (!v) continue;
     const ref = refOf(l.title);
     const now = Date.now();
@@ -589,6 +635,7 @@ export async function scanEbay(listings: RawListing[], opts: ScanOptions): Promi
   let evaluated = 0;
   let outOfTime = false;
   const judgedEbay: string[] = [];
+  const done = await alreadyEvaluated("wr:eeval:", listings.map((l) => l.id));
   for (const l of listings) {
     if (Date.now() > opts.deadline) { outOfTime = true; break; }
     if (!l.price || l.price < PRICE_MIN) continue;
@@ -598,7 +645,7 @@ export async function scanEbay(listings: RawListing[], opts: ScanOptions): Promi
     if ((l.sellerFeedback ?? 0) < 20 || (l.sellerPositivePct ?? 100) < 97) continue;
 
     const evalKey = `wr:eeval:${l.id}`;
-    if (await redis().get(evalKey)) continue;
+    if (done.has(l.id)) continue;
     evaluated++;
     judgedEbay.push(l.id);
     const seller = l.sellerName ?? "";

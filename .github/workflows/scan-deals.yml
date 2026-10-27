@@ -1,25 +1,64 @@
-# Optional: runs the deal scan every 15 minutes (Vercel's free plan only allows a daily cron).
-# Turn it on by adding repo secrets APP_URL (e.g. https://your-app.vercel.app) and CRON_SECRET
-# (same value as on Vercel). Without them it skips quietly; the dashboard's "Check now" works regardless.
+# Runs the deal scan here every 15 minutes (Vercel's free plan only allows a daily cron, and
+# its 60s limit only fits part of a sweep). Each run reads the newest r/WE + r/watch_swap posts;
+# every 3h it sweeps the whole 14-day window; eBay at most hourly. Then it asks the site to
+# AI-review whatever is new. Needs repo secrets UPSTASH_REDIS_REST_URL / _TOKEN (eBay keys,
+# CRON_SECRET and APP_URL optional); without the Upstash ones it skips quietly.
+# Run workflow with "full" ticked to force a full sweep now.
 name: scan-deals
 
 on:
   schedule:
     - cron: "*/15 * * * *"
   workflow_dispatch:
+    inputs:
+      full:
+        description: "Sweep the whole 14-day window now"
+        type: boolean
+        default: false
+
+concurrency:
+  group: scan-deals
+  cancel-in-progress: false
 
 jobs:
   scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 6
+    timeout-minutes: 40
+    env:
+      UPSTASH_REDIS_REST_URL: ${{ secrets.UPSTASH_REDIS_REST_URL }}
+      UPSTASH_REDIS_REST_TOKEN: ${{ secrets.UPSTASH_REDIS_REST_TOKEN }}
     steps:
-      - name: Trigger scan
+      - name: Check secrets
+        id: gate
+        run: |
+          if [ -z "$UPSTASH_REDIS_REST_URL" ] || [ -z "$UPSTASH_REDIS_REST_TOKEN" ]; then
+            echo "UPSTASH_REDIS_REST_URL / _TOKEN not set; skipping."
+          else
+            echo "ok=1" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.ok
+      - uses: actions/setup-node@v4
+        if: steps.gate.outputs.ok
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+        if: steps.gate.outputs.ok
+      - name: Scan
+        if: steps.gate.outputs.ok
+        env:
+          EBAY_CLIENT_ID: ${{ secrets.EBAY_CLIENT_ID }}
+          EBAY_CLIENT_SECRET: ${{ secrets.EBAY_CLIENT_SECRET }}
+          MIN_NET_PROFIT: ${{ secrets.MIN_NET_PROFIT }}
+          MAX_PURCHASE_PRICE: ${{ secrets.MAX_PURCHASE_PRICE }}
+          SCAN_MODE: ${{ inputs.full && 'full' || '' }}
+        run: npx -y tsx@4.19.2 scripts/scan-actions.ts
+      - name: AI review of new deals
+        if: steps.gate.outputs.ok
         env:
           APP_URL: ${{ secrets.APP_URL }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: |
-          if [ -z "$APP_URL" ] || [ -z "$CRON_SECRET" ]; then
-            echo "APP_URL / CRON_SECRET not set; skipping."
-            exit 0
-          fi
-          curl -sS --fail-with-body -m 300 -H "Authorization: Bearer $CRON_SECRET" "$APP_URL/api/cron/scan-deals"
+          if [ -z "$APP_URL" ] || [ -z "$CRON_SECRET" ]; then echo "APP_URL / CRON_SECRET not set; skipping review."; exit 0; fi
+          curl -sS -m 90 -H "Authorization: Bearer $CRON_SECRET" "$APP_URL/api/cron/review-deals" || echo "review call failed (non-fatal)"

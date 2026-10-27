@@ -20,15 +20,27 @@ export function maxPurchasePriceFromEnv(): number {
 
 const EBAY_RECHECK_MS = 6 * 3600 * 1000;
 
+/** When each stage must stop, in ms from the start of the run, plus which WatchRecon pages to read. */
+export interface ScanBudget {
+  redditMs: number;
+  ebayMs: number;
+  cleanupMs: number;
+  sweep?: ScanOptions["sweep"];
+  skipEbay?: boolean;
+}
+
+/** Fits a 60s serverless function; unfinished work resumes next run. */
+const SERVERLESS: ScanBudget = { redditMs: 28_000, ebayMs: 48_000, cleanupMs: 54_000 };
+
 /**
- * One full pass, shared by the cron and the dashboard's "Check now" button,
- * sized to finish inside a 60s serverless limit (unfinished work resumes next run):
+ * One full pass, shared by the cron, the dashboard's "Check now" button and the GitHub Action;
+ * by default sized to finish inside a 60s serverless limit (unfinished work resumes next run):
  *  1. r/WE + r/watch_swap via WatchRecon (until ~28s)
  *  2. eBay Browse, scored with the same comps (until ~48s)
  *  3. drop sold/ended: WatchRecon "Sold", eBay items no longer available, and
  *     removed/sold Reddit posts when Reddit API keys are configured
  */
-export async function runScan(days: number): Promise<ScanSummary> {
+export async function runScan(days: number, budget: ScanBudget = SERVERLESS): Promise<ScanSummary> {
   const started = Date.now();
   const base: Omit<ScanOptions, "deadline"> = {
     days,
@@ -36,6 +48,7 @@ export async function runScan(days: number): Promise<ScanSummary> {
     maxPrice: maxPurchasePriceFromEnv(),
     collectionMax: Number(process.env.COLLECTION_MAX_PRICE) || 2000,
     cheapMax: Number(process.env.CHEAP_MAX_PRICE) || 1500,
+    sweep: budget.sweep,
   };
   const summary: ScanSummary = {
     reddit: { ok: false, fetched: 0, evaluated: 0, stored: 0, outOfTime: false },
@@ -46,7 +59,7 @@ export async function runScan(days: number): Promise<ScanSummary> {
 
   // 1) Reddit (via WatchRecon)
   try {
-    const wr = await scanWatchRecon({ ...base, deadline: started + 28_000 });
+    const wr = await scanWatchRecon({ ...base, deadline: started + budget.redditMs });
     summary.reddit = { ok: true, fetched: wr.fetched, evaluated: wr.evaluated, stored: await store(wr.deals), outOfTime: wr.outOfTime };
     if (wr.soldIds.length) {
       await removeDeals("reddit", wr.soldIds);
@@ -59,12 +72,12 @@ export async function runScan(days: number): Promise<ScanSummary> {
   }
 
   // 2) eBay
-  if (!process.env.EBAY_CLIENT_ID || !process.env.EBAY_CLIENT_SECRET) {
+  if (budget.skipEbay || !process.env.EBAY_CLIENT_ID || !process.env.EBAY_CLIENT_SECRET) {
     summary.ebay = { ok: true, skipped: true, fetched: 0, evaluated: 0, stored: 0, outOfTime: false };
   } else {
     try {
       const { listings, failed } = await fetchEbayListings();
-      const eb = await scanEbay(listings, { ...base, deadline: started + 48_000 });
+      const eb = await scanEbay(listings, { ...base, deadline: started + budget.ebayMs });
       await removeDeals("ebay", eb.droppedIds);
       summary.ebay = {
         ok: failed.length === 0 || listings.length > 0,
@@ -83,7 +96,7 @@ export async function runScan(days: number): Promise<ScanSummary> {
   // 3) Sold / ended / removed
   try {
     const deals = await getDeals();
-    summary.removed.ebayEnded = await dropEndedEbay(deals, started + 54_000);
+    summary.removed.ebayEnded = await dropEndedEbay(deals, started + budget.cleanupMs);
     if (redditApiConfigured()) summary.removed.redditGone = await dropGoneReddit(deals);
   } catch (e) {
     console.error("[scan] sold check failed:", (e as Error).message);
