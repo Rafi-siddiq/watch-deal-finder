@@ -73,7 +73,9 @@ const VINTAGE_HAIRCUT = 0.75;
 
 /** Variants that price very differently from the base model: similar-title comps must agree on each. */
 // TAG chronographs are often listed by calibre, name or ref (Carrera Calibre 16, Glassbox, Heuer 02, CV2010) without "chrono".
-const VARIANT_WORDS = [/quartz/i, /chrono(graph)?\b|\bcalibre ?(?:1[167]|1887|36)\b|\bheuer ?0[12]\b|glass ?box|seafarer|\b(?:cv|cb[a-z]|ca[ryz])\d/i, /\bgmt\b/i, /moon ?phase/i, /\b(?:18k|14k|solid gold|rose gold|yellow gold)\b/i, /\bdiamonds?\b/i];
+const VARIANT_WORDS = [/quartz/i, /chrono(graph)?\b|\bcalibre ?(?:1[167]|1887|36)\b|\bheuer ?0[12]\b|glass ?box|seafarer|\b(?:cv|cb[a-z]|ca[ryz])\d/i, /\bgmt\b/i,
+  // 1970s Seiko Grand/King Quartz share words with Grand/King Seiko but sell for a fraction.
+  /grand ?quartz/i, /king ?quartz/i, /grand seiko/i, /moon ?phase/i, /\b(?:18k|14k|solid gold|rose gold|yellow gold)\b/i, /\bdiamonds?\b/i];
 const variantSig = (t: string) => VARIANT_WORDS.map((re) => (re.test(t) ? 1 : 0)).join("");
 
 /** Fallback resale for popular models usually listed without a reference (r/WE asks, Oct 2026). */
@@ -258,7 +260,7 @@ async function compByName(l: WrListing): Promise<{ n: number; med: number } | nu
   const tokens = nameTokens(l.title);
   if (tokens.length < 3) return null;
   const sig = variantSig(l.title);
-  const key = `wr:ncomp3:${tokens.join("-")}:${sig}`;
+  const key = `wr:ncomp4:${tokens.join("-")}:${sig}`;
   const cached = await redis().get<{ n: number; med: number } | "none">(key);
   if (cached) return cached === "none" ? null : cached;
 
