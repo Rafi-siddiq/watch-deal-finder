@@ -74,7 +74,8 @@ const TOOLS = [
 const keyOf = (d: Deal) => `${d.source}:${d.id}`;
 const hoursAgo = (t: number | undefined, now: number) => (t ? Math.round(((now - t) / HOUR) * 10) / 10 : undefined);
 const pctOf = (d: Deal) => (d.median > 0 ? Math.round((d.price / d.median) * 100) : undefined);
-const lastActivity = (d: Deal) => Math.max(d.foundAt || 0, d.lastPostedAt || 0);
+// foundAt is refreshed on every scan, so recency comes from the post itself: last bump, else listing date.
+const lastActivity = (d: Deal) => d.lastPostedAt || d.createdAt || 0;
 
 /** The fields a buyer needs, without images and bookkeeping. */
 function summary(d: Deal, now: number) {
@@ -92,7 +93,7 @@ function summary(d: Deal, now: number) {
     daysListed: d.daysListed,
     reposts: d.reposts,
     firstPrice: d.firstPrice && d.firstPrice !== d.price ? d.firstPrice : undefined,
-    postedHoursAgo: hoursAgo(d.lastPostedAt, now),
+    postedHoursAgo: hoursAgo(lastActivity(d), now),
     foundHoursAgo: hoursAgo(d.foundAt, now),
     seller: d.seller,
     sellerPosts: d.sellerPosts,
