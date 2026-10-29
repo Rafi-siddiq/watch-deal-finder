@@ -190,6 +190,50 @@ function shippingOf(it: BrowseItem): number | undefined {
   return costs.length ? Math.min(...costs) : undefined;
 }
 
+export interface EbayLiveItem {
+  title: string;
+  price: number;
+  shipping?: number;
+  total: number;
+  condition?: string;
+  listedHoursAgo?: number;
+  seller?: string;
+  sellerFeedback?: number;
+  sellerPositivePct?: number;
+  country?: string;
+  url: string;
+}
+
+/** Live Buy It Now search in Wristwatches, newest first; price filtering happens on the total with shipping. */
+export async function searchEbayLive(query: string, opts: { minPrice?: number; maxPrice?: number; limit?: number }): Promise<EbayLiveItem[]> {
+  const token = await getToken();
+  const res = await ebaySearch(query, token, 100);
+  if (!res.ok) throw new Error(`eBay search ${res.status} ${await safeText(res)}`);
+  const json = (await res.json()) as { itemSummaries?: BrowseItem[] };
+  const now = Date.now();
+  return (json.itemSummaries ?? [])
+    .map((it) => {
+      const price = Number(it.price?.value);
+      const shipping = shippingOf(it);
+      const created = it.itemCreationDate ? Date.parse(it.itemCreationDate) : NaN;
+      return {
+        title: it.title,
+        price,
+        shipping,
+        total: price + (shipping ?? 0),
+        condition: it.condition,
+        listedHoursAgo: Number.isFinite(created) ? Math.round((now - created) / 360_000) / 10 : undefined,
+        seller: it.seller?.username,
+        sellerFeedback: it.seller?.feedbackScore,
+        sellerPositivePct: it.seller?.feedbackPercentage ? Number(it.seller.feedbackPercentage) : undefined,
+        country: it.itemLocation?.country,
+        url: it.itemWebUrl.replace(/\?.*$/, ""),
+      };
+    })
+    .filter((i) => Number.isFinite(i.price) && i.total >= (opts.minPrice ?? 0) && i.total <= (opts.maxPrice ?? Infinity))
+    .slice(0, opts.limit ?? 20);
+}
+
 /**
  * Is this eBay item still for sale? Browse getItem 404s once a listing ends or
  * sells. Returns null when the check itself failed (keep the deal, retry later).

@@ -155,6 +155,17 @@ async function get(params: Record<string, string | number>, sources: string[] = 
   return (await getPage(params, sources)).items;
 }
 
+/** Live keyword search of r/WE + r/watch_swap via WatchRecon (newest first), straps/parts/WTB dropped. days 0 = all time. */
+export async function searchListings(query: string, opts: { days: number; priceMin?: number; priceMax?: number; pages?: number }): Promise<WrListing[]> {
+  const out: WrListing[] = [];
+  for (let p = 1; p <= (opts.pages ?? 1); p++) {
+    const { items, full } = await getPage({ query, last_days: opts.days, price_start: opts.priceMin ?? PRICE_MIN, price_end: opts.priceMax ?? 30000, current_page: p });
+    out.push(...items.filter((i) => !NOT_WATCH.test(i.title)));
+    if (!full) break;
+  }
+  return out;
+}
+
 export function parse(html: string): WrListing[] {
   return html
     .split('class="galleryItemContainer med"')

@@ -1,4 +1,6 @@
+import { searchEbayLive } from "./ebay";
 import type { Deal } from "./types";
+import { parseWhen, searchListings } from "./watchrecon";
 
 /**
  * Minimal MCP server (Streamable HTTP, stateless, JSON responses) so Claude can read
@@ -61,6 +63,29 @@ const TOOLS = [
       additionalProperties: false,
     },
     annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  {
+    name: "live_search",
+    title: "Live search",
+    description:
+      "Search right now, not the stored deals: r/Watchexchange + r/watch_swap (via WatchRecon) and eBay Buy It Now, newest first. " +
+      "Use a model or reference, e.g. \"spb155\", \"tudor prince 76200\", \"nomos club campus 38\". " +
+      "comps is the median of every Reddit ask for the same search (all time, mixed variants and condition), so pctOfMedian is a rough guide; " +
+      "used watches usually sell 5-10% under the median ask. Reddit results marked sold are kept for price context. Always show url and, for Reddit, uslUrl.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Model, reference or keywords." },
+        days: { type: "number", description: "Reddit look-back in days, default 7, max 30." },
+        minPrice: { type: "number" },
+        maxPrice: { type: "number", description: "USD; for eBay this is price plus shipping." },
+        sources: { type: "array", items: { type: "string", enum: ["reddit", "ebay"] }, description: "Default both." },
+        limit: { type: "number", description: "Max results per source, default 10, max 25." },
+      },
+      required: ["query"],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true, openWorldHint: true },
   },
   {
     name: "deal_stats",
@@ -157,6 +182,50 @@ export function dealStats(deals: Deal[], now = Date.now()) {
   return { total: deals.length, byKind, bySource, newestFoundHoursAgo: newest ? hoursAgo(newest, now) : null };
 }
 
+const quantile = (sorted: number[], q: number) => sorted[Math.min(sorted.length - 1, Math.floor(q * (sorted.length - 1)))];
+
+/** Fresh Reddit + eBay results for one query, priced against all-time Reddit asks for the same query. */
+export async function liveSearch(args: Record<string, unknown>, now = Date.now()) {
+  const query = String(args.query ?? "").trim();
+  if (query.length < 2) throw new Error("query is required");
+  const days = Math.max(1, Math.min(30, Math.floor(num(args.days) ?? 7)));
+  const limit = Math.max(1, Math.min(25, Math.floor(num(args.limit) ?? 10)));
+  const minPrice = num(args.minPrice);
+  const maxPrice = num(args.maxPrice);
+  const sources = Array.isArray(args.sources) && args.sources.length ? args.sources.map(String) : ["reddit", "ebay"];
+  const errors: string[] = [];
+
+  const [recent, history, ebay] = await Promise.all([
+    sources.includes("reddit") ? searchListings(query, { days, priceMin: minPrice, priceMax: maxPrice }).catch((e) => (errors.push(`reddit: ${e.message}`), [])) : [],
+    searchListings(query, { days: 0, pages: 2 }).catch((e) => (errors.push(`comps: ${e.message}`), [])),
+    sources.includes("ebay") ? searchEbayLive(query, { minPrice, maxPrice, limit }).catch((e) => (errors.push(`ebay: ${e.message}`), [])) : [],
+  ]);
+
+  const asks = history.map((h) => h.price).filter((p) => p > 0).sort((a, b) => a - b);
+  const median = asks.length >= 4 ? quantile(asks, 0.5) : undefined;
+  const pct = (p: number) => (median ? Math.round((p / median) * 100) : undefined);
+
+  return {
+    query,
+    comps: median
+      ? { medianAsk: median, low25: quantile(asks, 0.25), high75: quantile(asks, 0.75), asks: asks.length, soldPosts: history.filter((h) => h.sold).length }
+      : { note: `Only ${asks.length} Reddit asks found; no reliable median.` },
+    reddit: recent.slice(0, limit).map((l) => ({
+      title: l.title,
+      price: l.price,
+      pctOfMedian: l.price ? pct(l.price) : undefined,
+      postedHoursAgo: hoursAgo(parseWhen(l.when, now), now),
+      sold: l.sold || undefined,
+      seller: l.user,
+      sub: l.sub,
+      url: l.url,
+      uslUrl: `https://www.reddit.com/r/UniversalScammerList/wiki/database/${l.user.toLowerCase()}`,
+    })),
+    ebay: ebay.map((e) => ({ ...e, pctOfMedian: pct(e.total) })),
+    errors: errors.length ? errors : undefined,
+  };
+}
+
 const text = (v: unknown) => ({ content: [{ type: "text", text: JSON.stringify(v) }], structuredContent: v });
 
 /** Answer one JSON-RPC message; null for notifications (no reply). */
@@ -188,6 +257,7 @@ export async function handleRpc(msg: RpcMessage, loadDeals: () => Promise<Deal[]
       try {
         if (name === "find_deals") return ok(text(findDeals(await loadDeals(), args)));
         if (name === "deal_stats") return ok(text(dealStats(await loadDeals())));
+        if (name === "live_search") return ok(text(await liveSearch(args)));
         if (name === "get_deal") {
           const deal = (await loadDeals()).find((d) => keyOf(d) === args.key);
           if (!deal) return ok({ content: [{ type: "text", text: `No stored deal with key ${String(args.key)}; it may have sold or expired.` }], isError: true });
