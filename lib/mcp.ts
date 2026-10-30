@@ -1,6 +1,7 @@
 import { searchEbayLive } from "./ebay";
 import type { Deal } from "./types";
 import { parseWhen, searchListings } from "./watchrecon";
+import { recentDrops } from "./drops";
 
 /**
  * Minimal MCP server (Streamable HTTP, stateless, JSON responses) so Claude can read
@@ -86,6 +87,19 @@ const TOOLS = [
       additionalProperties: false,
     },
     annotations: { readOnlyHint: true, openWorldHint: true },
+  },
+  {
+    name: "drops",
+    title: "New releases to buy at retail",
+    description:
+      "Recent drop alerts from brands whose limited releases resell above retail (Kurono Tokyo, Studio Underd0g), checked hourly: " +
+      "new = new product on their shop, restock = back in stock, announcement = a dated on-sale notice. Show the url.",
+    inputSchema: {
+      type: "object",
+      properties: { days: { type: "number", description: "Look-back in days, default 14." } },
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true, openWorldHint: false },
   },
   {
     name: "deal_stats",
@@ -258,6 +272,10 @@ export async function handleRpc(msg: RpcMessage, loadDeals: () => Promise<Deal[]
         if (name === "find_deals") return ok(text(findDeals(await loadDeals(), args)));
         if (name === "deal_stats") return ok(text(dealStats(await loadDeals())));
         if (name === "live_search") return ok(text(await liveSearch(args)));
+        if (name === "drops") {
+          const r = await recentDrops(num(args.days) ?? 14);
+          return ok(text({ checkedHoursAgo: r.checkedAt ? hoursAgo(r.checkedAt, Date.now()) : null, events: r.events.map((e) => ({ ...e, hoursAgo: hoursAgo(e.at, Date.now()), at: undefined })) }));
+        }
         if (name === "get_deal") {
           const deal = (await loadDeals()).find((d) => keyOf(d) === args.key);
           if (!deal) return ok({ content: [{ type: "text", text: `No stored deal with key ${String(args.key)}; it may have sold or expired.` }], isError: true });

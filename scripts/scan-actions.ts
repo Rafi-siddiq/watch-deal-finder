@@ -4,14 +4,17 @@
 //  - each cycle: the newest WatchRecon pages, so fresh underpriced posts land within minutes;
 //  - every 3h, or SCAN_MODE=full on the first cycle: the whole 14-day window (stale / lowball);
 //  - eBay at most hourly (Browse API allows 5,000 calls a day);
-//  - then asks the site to AI-review new deals (APP_URL + CRON_SECRET).
+//  - then asks the site to AI-review new deals (APP_URL + CRON_SECRET);
+//  - hourly, checks Kurono Tokyo / Studio Underd0g for new drops (lib/drops.ts).
 // Run: npx tsx scripts/scan-actions.ts   (needs UPSTASH_REDIS_REST_URL / _TOKEN; LOOP_MINUTES=0 = one cycle)
 import { Redis } from "@upstash/redis";
 import { runScan } from "../lib/scan";
+import { checkDrops } from "../lib/drops";
 
 const MIN = 60_000;
 const FULL_EVERY_MS = 180 * MIN;
 const EBAY_EVERY_MS = 60 * MIN;
+const DROPS_EVERY_MS = 60 * MIN;
 const CYCLE_MS = (Number(process.env.CYCLE_MINUTES) || 15) * MIN;
 const LOOP_MS = (Number(process.env.LOOP_MINUTES) || 0) * MIN;
 
@@ -33,6 +36,11 @@ async function cycle(forceFull: boolean): Promise<boolean> {
   if (ebay && s.ebay.ok && !s.ebay.skipped) await redis.set("gha:lastEbayAt", now);
   console.log(new Date().toISOString(), JSON.stringify({ mode: full ? "full" : "newest", ebay, ...s }));
   await review();
+  if (now - (Number(await redis.get("gha:lastDropsAt")) || 0) > DROPS_EVERY_MS) {
+    await redis.set("gha:lastDropsAt", now);
+    const drops = await checkDrops().catch((e) => (console.log("drops check failed:", (e as Error).message), []));
+    console.log("drops:", drops.length ? JSON.stringify(drops) : "nothing new");
+  }
   return s.reddit.ok || s.ebay.ok;
 }
 

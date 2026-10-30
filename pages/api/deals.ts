@@ -1,5 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getDeals } from "@/lib/redis";
+import { recentDrops } from "@/lib/drops";
 import type { Deal } from "@/lib/types";
 
 /**
@@ -17,7 +18,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const limit = clampInt(req.query.limit, total, 0, total);
     const deals = limit === total && offset === 0 ? all : all.slice(offset, offset + limit);
 
-    return res.status(200).json({ ok: true, total, deals });
+    // Drop alerts from the last week ride along for the dashboard banner.
+    const drops = (await recentDrops(7).catch(() => ({ events: [] }))).events;
+    return res.status(200).json({ ok: true, total, deals, drops });
   } catch (e) {
     console.error("[api/deals] failed:", (e as Error).message);
     return res.status(500).json({ ok: false, error: (e as Error).message, deals: [], total: 0 });

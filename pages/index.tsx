@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useReducedMotion, motion } from "framer-motion";
 import Head from "next/head";
 import type { Deal } from "@/lib/types";
+import type { DropEvent } from "@/lib/drops";
 import DealRow from "@/components/DealRow";
 import { fmtWhen, maybeSold } from "@/components/dealUtils";
 
@@ -81,6 +82,8 @@ function readHidden(): Set<string> {
 
 export default function Dashboard() {
   const [deals, setDeals] = useState<Deal[]>([]);
+  /** New releases to buy at retail (Kurono Tokyo, Studio Underd0g), last 7 days. */
+  const [drops, setDrops] = useState<DropEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [tab, setTab] = useState<Tab>("flips");
@@ -98,6 +101,7 @@ export default function Dashboard() {
     const res = await fetch("/api/deals");
     const j = await res.json();
     if (!j.ok) throw new Error(j.error || "Failed to load deals");
+    setDrops((j.drops as DropEvent[] | undefined) ?? []);
     return j.deals as Deal[];
   }
 
@@ -319,6 +323,25 @@ export default function Dashboard() {
         </header>
 
         <main className="mx-auto max-w-5xl px-4 pt-5">
+          {drops.length > 0 && (
+            <section aria-label="New drops" className="mb-5 rounded-2xl border border-brand/40 bg-card px-4 py-3">
+              <p className="font-mono text-[11px] uppercase tracking-[0.14em] text-brand">Drops to buy at retail</p>
+              <ul className="mt-2 space-y-1.5">
+                {drops.slice(0, 5).map((e) => (
+                  <li key={`${e.url}|${e.type}|${e.at}`} className="text-[14px] leading-snug">
+                    <a href={e.url} target="_blank" rel="noreferrer" className="text-foreground underline-offset-2 hover:underline">
+                      <span className="font-medium">{e.brand}</span>
+                      {" · "}
+                      {e.type === "announcement" ? e.title : `${e.title}${e.price ? ` · $${e.price.toLocaleString()}` : ""}`}
+                    </a>
+                    <span className="ml-2 font-mono text-[11px] text-muted">
+                      {e.type === "new" ? (e.available ? "new, in stock" : "new") : e.type === "restock" ? "back in stock" : e.type === "page" ? "new release page" : "announced"} · {fmtWhen(e.at)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
           <p className="font-mono text-[11px] uppercase tracking-[0.14em] text-brand">{activeTab.label}</p>
           <p className="mt-1 max-w-2xl text-[14px] leading-relaxed text-muted">{activeTab.blurb}</p>
 
