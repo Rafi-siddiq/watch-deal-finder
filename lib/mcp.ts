@@ -280,6 +280,7 @@ export async function handleRpc(msg: RpcMessage, loadDeals: () => Promise<Deal[]
           return ok(text({
             checkedHoursAgo: r.checkedAt ? hoursAgo(r.checkedAt, now) : null,
             brands: r.brands,
+            tracked: r.tracked,
             events: r.events.map((e) => ({ ...e, hoursAgo: hoursAgo(e.at, now), at: undefined })),
             current: r.current.slice(0, 50).map((c) => ({ ...c, listedDaysAgo: c.listedAt ? Math.round((now - c.listedAt) / 86_400_000) : undefined, listedAt: undefined })),
           }));

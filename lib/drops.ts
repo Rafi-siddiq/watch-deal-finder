@@ -296,8 +296,24 @@ function currentFrom(seen: Record<string, SeenProduct>, now: number): CurrentDro
     .sort((a, b) => (b.listedAt ?? 0) - (a.listedAt ?? 0));
 }
 
+/** Per brand: products tracked, in stock, flagged limited, and with a listing date (shows the watcher is reading each shop). */
+function trackedStats(seen: Record<string, SeenProduct>) {
+  const out: Record<string, { products: number; inStock: number; limited: number; dated: number }> = {};
+  for (const [key, p] of Object.entries(seen)) {
+    const b = (out[key.split("|")[0]] ??= { products: 0, inStock: 0, limited: 0, dated: 0 });
+    b.products++;
+    if (p.available) b.inStock++;
+    if (p.limited) b.limited++;
+    if (p.listedAt) b.dated++;
+  }
+  return out;
+}
+
 /** Drop alerts from the last `days` days (newest first), what's buyable now, when the sites were last checked, and which brands are watched. */
-export async function recentDrops(days = 14, now = Date.now()): Promise<{ checkedAt: number | null; brands: string[]; events: DropEvent[]; current: CurrentDrop[] }> {
+export async function recentDrops(
+  days = 14,
+  now = Date.now()
+): Promise<{ checkedAt: number | null; brands: string[]; events: DropEvent[]; current: CurrentDrop[]; tracked: Record<string, { products: number; inStock: number; limited: number; dated: number }> }> {
   const [raw, checkedAt, seen] = await Promise.all([
     redis().lrange<DropEvent>(EVENTS_KEY, 0, MAX_EVENTS - 1),
     redis().get<number>(CHECKED_KEY),
@@ -308,5 +324,6 @@ export async function recentDrops(days = 14, now = Date.now()): Promise<{ checke
     brands: DROP_SITES.map((s) => s.brand),
     events: raw.filter((e) => now - e.at <= days * 86_400_000),
     current: currentFrom(seen ?? {}, now),
+    tracked: trackedStats(seen ?? {}),
   };
 }
