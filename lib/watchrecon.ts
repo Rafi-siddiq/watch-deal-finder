@@ -400,7 +400,7 @@ const CHEAP_MIN_OFFER_RATIO = 0.65;
  * vintage, so there only the condition words apply.
  */
 const ROUGH = /\bas[- ]is\b|untested|not tested|not running|non[- ]?working|needs? (?:service|repair|work|cleaning|battery)|no maintenance|for repair|project watch|restoration|heavy wear|heavily worn|scratched|dented|cracked crystal|dirty|tarnish|\bpatina\b.*\b(?:dial|hands)\b.*\bdamage/i;
-const EBAY_VINTAGE = /\bvintage\b|\bantique\b|\bestate\b|\b19[0-8]\ds?\b|\bpocket watch\b|\bmanual wind(?:ing)?\b.*\b19|\b(?:ladies|lady|lady's|women'?s|womens|ladymatic|boys?)\b|\b(?:2[0-9]|3[0-3])\s?mm\b|tuning fork|\bgold[- ]?(?:tone|plated|filled)\b|\bgp\b|\bdial (?:&|and) hands\b|\bhands (?:&|and) dial\b|\bdial only\b|\bjunk\b|\bwatch king\b/i;
+const EBAY_VINTAGE = /\bvintage\b|\bantique\b|\bestate\b|\b19[0-8]\ds?\b|\bpocket watch\b|\bmanual wind(?:ing)?\b.*\b19|\b(?:ladies|lady|lady's|women'?s|womens|ladymatic|boys?)\b|\b(?:2[0-9]|3[0-3])(?:\.\d)?\s?mm\b|tuning fork|\bgold[- ]?(?:tone|plated|filled)\b|\bgp\b|\bdial (?:&|and) hands\b|\bhands (?:&|and) dial\b|\bdial only\b|\bjunk\b|\bwatch king\b/i;
 
 /** Plated gold (gold-tone, gold-filled, cap gold, vermeil): the plating wears and these resell far under comps. */
 const PLATED = /\bgold[- ]?(?:tone|plated?|filled|fill|capped)\b|\bcap[- ]?gold\b|\bvermeil\b|\b(?:s?gp|rgp|gf|agf)\b|\b(?:10|14|18)k? gold (?:plated|filled)\b/i;
