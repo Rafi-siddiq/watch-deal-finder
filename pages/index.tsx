@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useReducedMotion, motion } from "framer-motion";
 import Head from "next/head";
 import type { Deal } from "@/lib/types";
-import type { DropEvent } from "@/lib/drops";
+import type { CurrentDrop, DropEvent } from "@/lib/drops";
 import DealRow from "@/components/DealRow";
 import DropsPanel from "@/components/DropsPanel";
 import { fmtWhen, maybeSold } from "@/components/dealUtils";
@@ -92,7 +92,7 @@ export default function Dashboard() {
   const [drops, setDrops] = useState<DropEvent[]>([]);
   /** The last 7 days of drops, for the banner on the deal tabs. */
   const [bannerDrops, setBannerDrops] = useState<DropEvent[]>([]);
-  const [dropsMeta, setDropsMeta] = useState<{ checkedAt: number | null; brands: string[] }>({ checkedAt: null, brands: [] });
+  const [dropsMeta, setDropsMeta] = useState<{ checkedAt: number | null; brands: string[]; current: CurrentDrop[] }>({ checkedAt: null, brands: [], current: [] });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [tab, setTab] = useState<Tab>("flips");
@@ -360,7 +360,7 @@ export default function Dashboard() {
           <p className="mt-1 max-w-2xl text-[14px] leading-relaxed text-muted">{activeTab.blurb}</p>
 
           {tab === "drops" ? (
-            <DropsPanel drops={drops} checkedAt={dropsMeta.checkedAt} brands={dropsMeta.brands} />
+            <DropsPanel drops={drops} current={dropsMeta.current ?? []} checkedAt={dropsMeta.checkedAt} brands={dropsMeta.brands} />
           ) : (
           <>
           <div className="mt-4 flex items-center justify-between gap-3 border-b border-border">

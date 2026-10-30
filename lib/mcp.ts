@@ -92,8 +92,10 @@ const TOOLS = [
     name: "drops",
     title: "New releases to buy at retail",
     description:
-      "Recent drop alerts from brands whose limited releases resell above retail (Kurono Tokyo, Studio Underd0g), checked hourly: " +
-      "new = new product on their shop, restock = back in stock, announcement = a dated on-sale notice. Show the url.",
+      "Drops from brands whose limited releases resell at or above retail (Kurono Tokyo, Studio Underd0g, Seiko limited editions, " +
+      "Halios, anOrdain, Serica, Farer, Monta, Traska, Zelos, echo/neutra, Brew, Yema, Doxa), checked hourly. " +
+      "events: new = new product, restock = back in stock, page = new release page, announcement = dated on-sale notice. " +
+      "current: what can be bought at retail right now (in-stock limited editions from the last 6 months and releases from the last 45 days). Show the url.",
     inputSchema: {
       type: "object",
       properties: { days: { type: "number", description: "Look-back in days, default 14." } },
@@ -274,7 +276,13 @@ export async function handleRpc(msg: RpcMessage, loadDeals: () => Promise<Deal[]
         if (name === "live_search") return ok(text(await liveSearch(args)));
         if (name === "drops") {
           const r = await recentDrops(num(args.days) ?? 14);
-          return ok(text({ checkedHoursAgo: r.checkedAt ? hoursAgo(r.checkedAt, Date.now()) : null, events: r.events.map((e) => ({ ...e, hoursAgo: hoursAgo(e.at, Date.now()), at: undefined })) }));
+          const now = Date.now();
+          return ok(text({
+            checkedHoursAgo: r.checkedAt ? hoursAgo(r.checkedAt, now) : null,
+            brands: r.brands,
+            events: r.events.map((e) => ({ ...e, hoursAgo: hoursAgo(e.at, now), at: undefined })),
+            current: r.current.slice(0, 50).map((c) => ({ ...c, listedDaysAgo: c.listedAt ? Math.round((now - c.listedAt) / 86_400_000) : undefined, listedAt: undefined })),
+          }));
         }
         if (name === "get_deal") {
           const deal = (await loadDeals()).find((d) => keyOf(d) === args.key);

@@ -61,7 +61,23 @@ interface SeenProduct {
   title: string;
   available: boolean;
   price?: number;
+  limited?: boolean;
+  /** When the shop first listed it (Shopify created_at), Unix ms. */
+  listedAt?: number;
 }
+
+/** A piece you can buy at retail right now: an in-stock limited edition from the last 6 months, or any release from the last 45 days. */
+export interface CurrentDrop {
+  brand: string;
+  title: string;
+  price?: number;
+  limited: boolean;
+  listedAt?: number;
+  url: string;
+}
+const CURRENT_DAYS = 45;
+/** Limited editions still in stock after this long didn't sell out, so they aren't drops. */
+const CURRENT_LIMITED_DAYS = 180;
 
 const UA = "watch-deal-finder/1.0 (personal deal research)";
 const EVENTS_KEY = "drops:events";
@@ -74,12 +90,13 @@ const MAX_RELEASE_PAGES = 30;
 /** Site pages that are never releases. */
 const NOT_RELEASE = /salon|terms|privacy|media|handling|shipping|faq|contact|about|warranty|care|policy|careers|stockist|returns/i;
 /** Shop items that aren't watches: by the store's product type, or a title that leads with the accessory. */
-const ACCESSORY_TYPE = /strap|band|bracelet|accessor|gift|apparel|clothing|merch|tool|part|service|insurance|protection|pouch|roll|deposit/i;
-const ACCESSORY_TITLE = /^\W*(?:[\w-]+ )?(?:straps?|bracelets?|bands?|nato|buckle|clasp|gift ?card|e-?gift|pouch|watch roll|travel case|tool|spring ?bars?|end ?links?|bezel insert|t-?shirt|hat|cap|hoodie|poster|sticker|keychain|mug|winder|deposit)\b|\bgift ?card\b|shipping protection|\bstrap only\b|\b(?:straps?|bracelets?|bands?)\s+(?:for|fits?)\b|\bwatch straps?\b|\bstrap specification\b|\b(?:straps?|bands?)\b[^|]{0,24}\b(?:1[6-9]|2[0-4])(?:\.\d+)?\s?mm\b/i;
+const ACCESSORY_TYPE = /strap|band|bracelet|accessor|gift|apparel|clothing|merch|tool|part|service|insurance|protection|pouch|roll|deposit|clock/i;
+const ACCESSORY_TITLE = /^\W*(?:[\w-]+ )?(?:straps?|bracelets?|bands?|nato|buckle|clasp|gift ?card|e-?gift|pouch|watch roll|travel case|tool|spring ?bars?|end ?links?|bezel insert|t-?shirt|hat|cap|hoodie|poster|sticker|keychain|mug|winder|deposit)\b|\bgift ?card\b|shipping protection|\bclock\b|^QX[A-Z]\d|\bstrap only\b|\b(?:straps?|bracelets?|bands?)\s+(?:for|fits?)\b|\bwatch straps?\b|\bstrap specification\b|\b(?:straps?|bands?)\b[^|]{0,24}\b(?:1[6-9]|2[0-4])(?:\.\d+)?\s?mm\b/i;
 /** Anything cheaper is a strap, tool or deposit, not a watch worth chasing. */
 const MIN_PRICE = 150;
 const notWatch = (title: string, type = "") => ACCESSORY_TITLE.test(title) || (type !== "" && ACCESSORY_TYPE.test(type));
-const LIMITED = /limited|\blimit(?:ed)? to\b|\bLE\b|numbered|pieces worldwide|\b\d{2,5} pieces\b|one of \d+|\bx \d{2,4}\b/i;
+// "Limited warranty" isn't a limited edition, so a bare "limited" doesn't count.
+const LIMITED = /limited edition|limited (?:series|run|release|production)|\blimit(?:ed)? to \d|\bLE\b|numbered|pieces worldwide|\b\d{2,5} (?:pieces|units|examples)\b|one of \d+/i;
 
 let _redis: Redis | null = null;
 function redis(): Redis {
@@ -137,11 +154,12 @@ function noteProduct(run: Run, site: DropSite, handle: string, cur: SeenProduct,
   const base = { brand: site.brand, ...cur, limited: limited || undefined, url, at: run.now };
   if (!prev && !firstRun) run.events.push({ ...base, type: "new" });
   else if (prev && !prev.available && cur.available && (site.restocks || limited)) run.events.push({ ...base, type: "restock" });
-  if (!prev || prev.available !== cur.available || prev.price !== cur.price) run.seenUpdates[key] = cur;
+  const next = { ...cur, limited: limited || undefined };
+  if (!prev || prev.available !== cur.available || prev.price !== cur.price || prev.limited !== next.limited || prev.listedAt !== cur.listedAt) run.seenUpdates[key] = next;
 }
 
 async function checkShopify(run: Run, site: DropSite) {
-  type Product = { handle: string; title: string; product_type?: string; tags?: string[] | string; body_html?: string; variants?: { available?: boolean; price?: string }[] };
+  type Product = { handle: string; title: string; product_type?: string; tags?: string[] | string; body_html?: string; created_at?: string; variants?: { available?: boolean; price?: string }[] };
   const products: Product[] = [];
   for (let page = 1; page <= (site.feedPages ?? 1); page++) {
     const body = await get(`${site.base}/products.json?limit=250&page=${page}`);
@@ -167,7 +185,12 @@ async function checkShopify(run: Run, site: DropSite) {
     if (site.limitedOnly && !limited) continue;
     const price = Number(p.variants?.[0]?.price);
     if (price > 0 && price < MIN_PRICE) continue;
-    noteProduct(run, site, p.handle, { title: p.title, available: (p.variants ?? []).some((v) => v.available), price: price > 0 ? Math.round(price) : undefined }, limited, firstRun);
+    const listedAt = Date.parse(p.created_at ?? "");
+    noteProduct(
+      run, site, p.handle,
+      { title: p.title, available: (p.variants ?? []).some((v) => v.available), price: price > 0 ? Math.round(price) : undefined, listedAt: Number.isFinite(listedAt) ? listedAt : undefined },
+      limited, firstRun
+    );
   }
 }
 
@@ -260,8 +283,30 @@ export async function checkDrops(now = Date.now(), sites: DropSite[] = DROP_SITE
   return run.events;
 }
 
-/** Drop alerts from the last `days` days, newest first, when the sites were last checked, and which brands are watched. */
-export async function recentDrops(days = 14, now = Date.now()): Promise<{ checkedAt: number | null; brands: string[]; events: DropEvent[] }> {
-  const [raw, checkedAt] = await Promise.all([redis().lrange<DropEvent>(EVENTS_KEY, 0, MAX_EVENTS - 1), redis().get<number>(CHECKED_KEY)]);
-  return { checkedAt: checkedAt ?? null, brands: DROP_SITES.map((s) => s.brand), events: raw.filter((e) => now - e.at <= days * 86_400_000) };
+/** Buyable now: in-stock limited editions from the last 6 months and in-stock releases from the last 45 days, newest listing first. */
+function currentFrom(seen: Record<string, SeenProduct>, now: number): CurrentDrop[] {
+  const base = new Map(DROP_SITES.map((s) => [s.brand, s.base]));
+  const within = (p: SeenProduct, days: number) => p.listedAt === undefined || now - p.listedAt <= days * 86_400_000;
+  return Object.entries(seen)
+    .filter(([, p]) => p.available && (p.limited ? within(p, CURRENT_LIMITED_DAYS) : p.listedAt !== undefined && within(p, CURRENT_DAYS)))
+    .map(([key, p]) => {
+      const [brand, handle] = key.split("|");
+      return { brand, title: p.title, price: p.price, limited: Boolean(p.limited), listedAt: p.listedAt, url: `${base.get(brand) ?? ""}/products/${handle}` };
+    })
+    .sort((a, b) => (b.listedAt ?? 0) - (a.listedAt ?? 0));
+}
+
+/** Drop alerts from the last `days` days (newest first), what's buyable now, when the sites were last checked, and which brands are watched. */
+export async function recentDrops(days = 14, now = Date.now()): Promise<{ checkedAt: number | null; brands: string[]; events: DropEvent[]; current: CurrentDrop[] }> {
+  const [raw, checkedAt, seen] = await Promise.all([
+    redis().lrange<DropEvent>(EVENTS_KEY, 0, MAX_EVENTS - 1),
+    redis().get<number>(CHECKED_KEY),
+    redis().hgetall<Record<string, SeenProduct>>(SEEN_KEY),
+  ]);
+  return {
+    checkedAt: checkedAt ?? null,
+    brands: DROP_SITES.map((s) => s.brand),
+    events: raw.filter((e) => now - e.at <= days * 86_400_000),
+    current: currentFrom(seen ?? {}, now),
+  };
 }
