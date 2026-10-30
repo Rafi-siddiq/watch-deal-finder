@@ -135,6 +135,8 @@ export interface Deal {
   sellerPositivePct?: number;
   /** Shipping included in `price` (eBay). */
   shippingIncluded?: number;
+  /** eBay: the listing's item specifics and condition notes were checked (lib/watchrecon ebayDetailProblem). */
+  detailsChecked?: boolean;
   /** Item ships from (eBay country code). */
   country?: string;
   /** Claude's second look at the deal (absent until reviewed, or when AI review is off). */

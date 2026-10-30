@@ -119,7 +119,7 @@ function redis(): Redis {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** eBay item details, cached a week: the scan and the AI review both read them. */
-async function ebayDetailsCached(id: string): Promise<EbayItemDetails | null> {
+export async function ebayDetailsCached(id: string): Promise<EbayItemDetails | null> {
   const key = `ebay:det:${id}`;
   const hit = await redis().get<EbayItemDetails>(key);
   if (hit) return hit;
@@ -782,6 +782,7 @@ export async function scanEbay(listings: RawListing[], opts: ScanOptions): Promi
       sellerFeedback: l.sellerFeedback,
       sellerPositivePct: l.sellerPositivePct,
       shippingIncluded: l.shippingCost,
+      detailsChecked: Boolean(det),
       country: l.country,
       maxOffer: v.maxOffer,
       compBasis: comp.basis,

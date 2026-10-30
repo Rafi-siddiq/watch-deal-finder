@@ -1,4 +1,4 @@
-import { scanWatchRecon, scanEbay, type ScanOptions } from "./watchrecon";
+import { scanWatchRecon, scanEbay, ebayDetailsCached, ebayDetailProblem, type ScanOptions } from "./watchrecon";
 import { fetchEbayListings, ebayItemAvailable } from "./ebay";
 import { upsertDeal, removeDeals, getDeals, soldMarked } from "./redis";
 import { checkRedditPosts, redditApiConfigured } from "./redditApi";
@@ -133,17 +133,24 @@ async function store(deals: Deal[]): Promise<number> {
   return n;
 }
 
-/** eBay deals not re-checked in 6h: remove if the item ended/sold, else mark confirmed. */
+/**
+ * eBay deals not re-checked in 6h, or never checked against the listing's details: remove
+ * if the item ended/sold or its specifics/condition notes rule it out, else mark confirmed.
+ */
 async function dropEndedEbay(deals: Deal[], deadline: number): Promise<number> {
   const due = deals
-    .filter((d) => d.source === "ebay" && Date.now() - (d.lastConfirmedActiveAt || 0) > EBAY_RECHECK_MS)
+    .filter((d) => d.source === "ebay" && (!d.detailsChecked || Date.now() - (d.lastConfirmedActiveAt || 0) > EBAY_RECHECK_MS))
     .sort((a, b) => (a.lastConfirmedActiveAt || 0) - (b.lastConfirmedActiveAt || 0));
   const gone: string[] = [];
   for (const d of due) {
     if (Date.now() > deadline) break;
     const live = await ebayItemAvailable(d.id);
     if (live === false) gone.push(d.id);
-    else if (live === true) await upsertDeal({ ...d, lastConfirmedActiveAt: Date.now() }); // keeps d.ai
+    else if (live === true) {
+      const det = d.detailsChecked ? null : await ebayDetailsCached(d.id);
+      if (det && ebayDetailProblem(det)) gone.push(d.id);
+      else await upsertDeal({ ...d, lastConfirmedActiveAt: Date.now(), detailsChecked: d.detailsChecked || Boolean(det) }); // keeps d.ai
+    }
   }
   if (gone.length) await removeDeals("ebay", gone);
   return gone.length;
