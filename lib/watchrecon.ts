@@ -1,5 +1,6 @@
 import { Redis } from "@upstash/redis";
 import type { Deal, RawListing } from "./types";
+import { ebayItemDetails, type EbayItemDetails } from "./ebay";
 
 /**
  * WatchRecon mirrors r/Watchexchange (RWX) and r/watch_swap (RWS) and keeps every
@@ -116,6 +117,16 @@ function redis(): Redis {
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** eBay item details, cached a week: the scan and the AI review both read them. */
+async function ebayDetailsCached(id: string): Promise<EbayItemDetails | null> {
+  const key = `ebay:det:${id}`;
+  const hit = await redis().get<EbayItemDetails>(key);
+  if (hit) return hit;
+  const det = await ebayItemDetails(id);
+  if (det) await redis().set(key, { ...det, description: det.description.slice(0, 4000) }, { ex: 7 * 24 * 3600 });
+  return det;
+}
 
 /** Ids evaluated in the last 12h, looked up 200 keys per MGET so a big sweep costs a few Redis commands, not thousands. */
 async function alreadyEvaluated(prefix: string, ids: string[]): Promise<Set<string>> {
@@ -402,6 +413,32 @@ export function excludedListing(source: string, title: string): boolean {
   return source === "ebay" && (EBAY_VINTAGE.test(title) || EBAY_QUARTZ.test(title));
 }
 
+/** Defects in an eBay seller's condition notes that put a watch well under its comps. */
+const EBAY_DEFECT = /\bcorro\w*|\brust(?:y|ed)?\b|\bchip(?:ped|s)?\b|\bcrack(?:ed|s)?\b|\bnot (?:working|running)\b|\bdoes(?:n'?t| not) (?:work|run)\b|\bstopped\b|\bneeds? (?:a )?(?:service|repair|overhaul)\b|\boverhaul (?:is )?(?:required|needed|necessary)\b|\bstains?\b|\bstained\b|\bpeel\w*|\bwater damage\b|\bjunk\b|\bfor parts\b|\brank\s*(?:c|bc|d)\b|\b(?:c|bc|d)\s*rank\b/gi;
+const NEGATED = /\b(?:no|without|free of|not|never|zero)\b[\w\s,/-]{0,14}$/i;
+
+/** First reason an eBay listing's item specifics or condition notes rule it out, or null. */
+export function ebayDetailProblem(det: EbayItemDetails): string | null {
+  const aspect = (name: string) => det.aspects.find((a) => a.toLowerCase().startsWith(name.toLowerCase() + ":"))?.slice(name.length + 1).trim() ?? "";
+  const movement = aspect("Movement");
+  if (/quartz|battery/i.test(movement) && !/automatic|mechanical|manual|self-?wind/i.test(movement)) return `${movement} movement`;
+  if (/women|ladies|girls|boys|kids/i.test(aspect("Department"))) return `${aspect("Department")} watch`;
+  const mm = parseFloat(aspect("Case Size"));
+  if (mm >= 20 && mm < 34) return `${mm}mm case`;
+  if (/gold[- ]?(?:plated|tone|filled)|vermeil/i.test(`${aspect("Case Material")} ${aspect("Band Material")}`)) return "plated gold";
+  const notes = `${det.conditionDescription ?? ""} ${det.description}`;
+  for (const m of notes.matchAll(EBAY_DEFECT)) {
+    if (!NEGATED.test(notes.slice(Math.max(0, (m.index ?? 0) - 24), m.index))) return `condition notes say "${m[0]}"`;
+  }
+  return null;
+}
+
+/** Case size from eBay item specifics, e.g. "Case Size: 38 mm". */
+function ebayCaseMm(det: EbayItemDetails | null): number | undefined {
+  const v = parseFloat(det?.aspects.find((a) => /^case size:/i.test(a))?.split(":")[1] ?? "");
+  return v >= 20 && v <= 50 ? v : undefined;
+}
+
 type Comp = { resale: number; basis: string; compCount: number; byName: boolean };
 
 /** Reference comps first, then the model table, then (when allowed) similar titles. Vintage comps get a haircut. */
@@ -673,7 +710,7 @@ export async function scanEbay(listings: RawListing[], opts: ScanOptions): Promi
   let evaluated = 0;
   let outOfTime = false;
   const judgedEbay: string[] = [];
-  const done = await alreadyEvaluated("wr:eeval:", listings.map((l) => l.id));
+  const done = await alreadyEvaluated("wr:eeval2:", listings.map((l) => l.id));
   for (const l of listings) {
     if (Date.now() > opts.deadline) { outOfTime = true; break; }
     if (!l.price || l.price < PRICE_MIN) continue;
@@ -682,7 +719,7 @@ export async function scanEbay(listings: RawListing[], opts: ScanOptions): Promi
     if (l.leafCategoryIds?.length && !l.leafCategoryIds.includes("31387")) continue;
     if ((l.sellerFeedback ?? 0) < 20 || (l.sellerPositivePct ?? 100) < 97) continue;
 
-    const evalKey = `wr:eeval:${l.id}`;
+    const evalKey = `wr:eeval2:${l.id}`;
     if (done.has(l.id)) continue;
     evaluated++;
     judgedEbay.push(l.id);
@@ -693,14 +730,22 @@ export async function scanEbay(listings: RawListing[], opts: ScanOptions): Promi
     if (!comp) continue;
     const total = l.price + (l.shippingCost ?? 0);
     if (total < 0.3 * comp.resale) continue;
+    // Cheap pre-check, then read the listing itself: titles often leave out quartz, size and
+    // condition, which is where most of the bad resale estimates came from.
+    if (!judge(total, comp, l.title, 9999, opts, false)) continue;
+    const det = await ebayDetailsCached(l.id);
+    if (det && ebayDetailProblem(det)) continue;
+    const caseMm = caseSizeOf(l.title) ?? ebayCaseMm(det);
+    const title = caseMm && !caseSizeOf(l.title) ? `${l.title} ${caseMm}mm` : l.title;
 
     const daysUp = Math.max(0, Math.floor((Date.now() - l.createdAt) / DAY_MS));
     const flags: string[] = [];
     if (total < SCAM_RATIO * comp.resale) flags.push(`${Math.round((1 - total / comp.resale) * 100)}% under comps — check it's the real model, complete and genuine`);
     if (comp.basis === "model table") flags.push("Comp from model table, not live asks — confirm variant/size");
     if (l.shippingCost === undefined) flags.push("Shipping cost not shown — check before buying");
+    if (!det) flags.push("Listing details unavailable — check movement, size and condition");
 
-    const v = judge(total, comp, l.title, daysUp, opts, flags.length > 0);
+    const v = judge(total, comp, title, daysUp, opts, flags.length > 0);
     if (!v) continue;
     const ref = refOf(l.title);
     const now = Date.now();
@@ -725,7 +770,7 @@ export async function scanEbay(listings: RawListing[], opts: ScanOptions): Promi
       needsReview: comp.basis === "model table",
       estimatedNetProfit: profitOf(v),
       withinBudget: (v.kind === "lowball" ? v.maxOffer : total) <= (v.kind === "collection" ? opts.collectionMax : opts.maxPrice),
-      caseMm: caseSizeOf(l.title),
+      caseMm,
       daysListed: daysUp,
       staleAfterDays: LOWBALL_MIN_DAYS,
       stale: daysUp >= LOWBALL_MIN_DAYS,
