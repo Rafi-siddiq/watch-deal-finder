@@ -18,9 +18,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const limit = clampInt(req.query.limit, total, 0, total);
     const deals = limit === total && offset === 0 ? all : all.slice(offset, offset + limit);
 
-    // Drop alerts from the last week ride along for the dashboard banner.
-    const drops = (await recentDrops(7).catch(() => ({ events: [] }))).events;
-    return res.status(200).json({ ok: true, total, deals, drops });
+    // Drop alerts from the last 30 days ride along for the Drops tab and banner.
+    const d = await recentDrops(30).catch(() => ({ checkedAt: null, brands: [] as string[], events: [] }));
+    return res.status(200).json({ ok: true, total, deals, drops: d.events, dropsMeta: { checkedAt: d.checkedAt, brands: d.brands } });
   } catch (e) {
     console.error("[api/deals] failed:", (e as Error).message);
     return res.status(500).json({ ok: false, error: (e as Error).message, deals: [], total: 0 });

@@ -4,9 +4,10 @@ import Head from "next/head";
 import type { Deal } from "@/lib/types";
 import type { DropEvent } from "@/lib/drops";
 import DealRow from "@/components/DealRow";
+import DropsPanel from "@/components/DropsPanel";
 import { fmtWhen, maybeSold } from "@/components/dealUtils";
 
-type Tab = "flips" | "cheap" | "lowball" | "micro" | "collection";
+type Tab = "flips" | "cheap" | "lowball" | "micro" | "collection" | "drops";
 
 const TABS: { key: Tab; label: string; blurb: string }[] = [
   {
@@ -33,6 +34,11 @@ const TABS: { key: Tab; label: string; blurb: string }[] = [
     key: "collection",
     label: "Collection",
     blurb: "Under 40mm and under your collection budget, priced 10%+ below what other sellers ask.",
+  },
+  {
+    key: "drops",
+    label: "Drops",
+    blurb: "New releases, restocks and announced drop dates from brands that resell at or above retail: Kurono Tokyo, Studio Underd0g, Seiko limited editions and the hyped microbrands. Checked hourly. Buy at retail, then keep or flip.",
   },
 ];
 
@@ -82,8 +88,11 @@ function readHidden(): Set<string> {
 
 export default function Dashboard() {
   const [deals, setDeals] = useState<Deal[]>([]);
-  /** New releases to buy at retail (Kurono Tokyo, Studio Underd0g), last 7 days. */
+  /** New releases to buy at retail (Kurono Tokyo, Studio Underd0g, Seiko LEs, microbrands), last 30 days. */
   const [drops, setDrops] = useState<DropEvent[]>([]);
+  /** The last 7 days of drops, for the banner on the deal tabs. */
+  const [bannerDrops, setBannerDrops] = useState<DropEvent[]>([]);
+  const [dropsMeta, setDropsMeta] = useState<{ checkedAt: number | null; brands: string[] }>({ checkedAt: null, brands: [] });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [tab, setTab] = useState<Tab>("flips");
@@ -101,7 +110,11 @@ export default function Dashboard() {
     const res = await fetch("/api/deals");
     const j = await res.json();
     if (!j.ok) throw new Error(j.error || "Failed to load deals");
-    setDrops((j.drops as DropEvent[] | undefined) ?? []);
+    const events = (j.drops as DropEvent[] | undefined) ?? [];
+    setDrops(events);
+    const weekAgo = Date.now() - 7 * 86_400_000;
+    setBannerDrops(events.filter((e) => e.at > weekAgo));
+    if (j.dropsMeta) setDropsMeta(j.dropsMeta);
     return j.deals as Deal[];
   }
 
@@ -246,17 +259,18 @@ export default function Dashboard() {
   );
 
   const counts = useMemo(() => {
-    const c: Record<Tab, number> = { flips: 0, cheap: 0, lowball: 0, micro: 0, collection: 0 };
+    const c: Record<Tab, number> = { flips: 0, cheap: 0, lowball: 0, micro: 0, collection: 0, drops: drops.length };
     for (const d of matches) if (!hidden.has(`${d.source}:${d.id}`) && d.ai?.verdict !== "skip") c[tabOf(d)]++;
     return c;
-  }, [matches, hidden]);
+  }, [matches, hidden, drops]);
 
   /** Tabs holding deals found since your last visit (shown as a dot). */
   const tabsWithNew = useMemo(() => {
     const s = new Set<Tab>();
     for (const d of matches) if (lastVisit > 0 && d.foundAt > lastVisit && !hidden.has(`${d.source}:${d.id}`) && d.ai?.verdict !== "skip") s.add(tabOf(d));
+    if (lastVisit > 0 && drops.some((e) => e.at > lastVisit)) s.add("drops");
     return s;
-  }, [matches, hidden, lastVisit]);
+  }, [matches, hidden, lastVisit, drops]);
 
   const inTab = useMemo(() => matches.filter((d) => tabOf(d) === tab), [matches, tab]);
   // Tucked away: deals you hid, and deals Claude reviewed as "skip".
@@ -323,11 +337,11 @@ export default function Dashboard() {
         </header>
 
         <main className="mx-auto max-w-5xl px-4 pt-5">
-          {drops.length > 0 && (
+          {tab !== "drops" && bannerDrops.length > 0 && (
             <section aria-label="New drops" className="mb-5 rounded-2xl border border-brand/40 bg-card px-4 py-3">
               <p className="font-mono text-[11px] uppercase tracking-[0.14em] text-brand">Drops to buy at retail</p>
               <ul className="mt-2 space-y-1.5">
-                {drops.slice(0, 5).map((e) => (
+                {bannerDrops.slice(0, 5).map((e) => (
                   <li key={`${e.url}|${e.type}|${e.at}`} className="text-[14px] leading-snug">
                     <a href={e.url} target="_blank" rel="noreferrer" className="text-foreground underline-offset-2 hover:underline">
                       <span className="font-medium">{e.brand}</span>
@@ -345,6 +359,10 @@ export default function Dashboard() {
           <p className="font-mono text-[11px] uppercase tracking-[0.14em] text-brand">{activeTab.label}</p>
           <p className="mt-1 max-w-2xl text-[14px] leading-relaxed text-muted">{activeTab.blurb}</p>
 
+          {tab === "drops" ? (
+            <DropsPanel drops={drops} checkedAt={dropsMeta.checkedAt} brands={dropsMeta.brands} />
+          ) : (
+          <>
           <div className="mt-4 flex items-center justify-between gap-3 border-b border-border">
             <div className="flex gap-5" role="group" aria-label="Sort">
               {(["newest", "best"] as Sort[]).map((s) => (
@@ -428,6 +446,8 @@ export default function Dashboard() {
                 : `Show ${[hiddenInTab && `${hiddenInTab} you hid`, skippedInTab && `${skippedInTab} Claude skipped`].filter(Boolean).join(" + ")}`}
             </button>
           )}
+          </>
+          )}
 
           <p className="mt-8 max-w-2xl text-[12px] leading-relaxed text-muted">
             For research only: nothing is bought or messaged for you. Resale estimates are 93% of what other sellers ask on
@@ -441,7 +461,7 @@ export default function Dashboard() {
           className="fixed inset-x-0 bottom-0 z-30 px-3"
           style={{ paddingBottom: "calc(0.75rem + env(safe-area-inset-bottom))" }}
         >
-          <div className="mx-auto grid max-w-md grid-cols-5 gap-1 rounded-2xl border border-border bg-chrome p-1.5 shadow-[0_8px_30px_rgba(0,0,0,0.25)] backdrop-blur-md">
+          <div className="mx-auto grid max-w-lg grid-cols-6 gap-1 rounded-2xl border border-border bg-chrome p-1.5 shadow-[0_8px_30px_rgba(0,0,0,0.25)] backdrop-blur-md">
             {TABS.map((t) => {
               const active = tab === t.key;
               return (
@@ -482,6 +502,7 @@ function TabIcon({ tab }: { tab: Tab }) {
         <path d="M12 9v3l2 1.5M9 3h6M9 21h6" />
       </>
     ),
+    drops: <path d="M6 8a6 6 0 0112 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.94 1.94 0 003.4 0" />,
   };
   return (
     <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
