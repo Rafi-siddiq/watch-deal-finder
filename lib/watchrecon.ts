@@ -378,7 +378,7 @@ const MICRO = /\b(traska|kuoe|maen|lorier|baltic|farer|furlan marri|serica|halio
 const MICRO_TARGET_NET = 200;
 const MICRO_MAX_RATIO = 0.9;
 /** Cheap flips: under CHEAP_MAX_PRICE, at least this profit at asking, or an offer that nets CHEAP_TARGET_NET. */
-const CHEAP_MIN_NET = 125;
+const CHEAP_MIN_NET = 150;
 const CHEAP_TARGET_NET = 250;
 const CHEAP_MIN_DAYS = 14;
 const CHEAP_MIN_OFFER_RATIO = 0.65;
@@ -389,7 +389,18 @@ const CHEAP_MIN_OFFER_RATIO = 0.65;
  * vintage, so there only the condition words apply.
  */
 const ROUGH = /\bas[- ]is\b|untested|not tested|not running|non[- ]?working|needs? (?:service|repair|work|cleaning|battery)|no maintenance|for repair|project watch|restoration|heavy wear|heavily worn|scratched|dented|cracked crystal|dirty|tarnish|\bpatina\b.*\b(?:dial|hands)\b.*\bdamage/i;
-const EBAY_VINTAGE = /\bvintage\b|\bantique\b|\bestate\b|\b19[0-8]\ds?\b|\bpocket watch\b|\bmanual wind(?:ing)?\b.*\b19|\b(?:ladies|lady|lady's|women'?s|womens|ladymatic|boys?)\b|\b(?:2[0-9]|3[0-1])\s?mm\b|tuning fork|\bgold[- ]?(?:tone|plated|filled)\b|\bgp\b|\bdial (?:&|and) hands\b|\bhands (?:&|and) dial\b|\bdial only\b|\bjunk\b|\bwatch king\b/i;
+const EBAY_VINTAGE = /\bvintage\b|\bantique\b|\bestate\b|\b19[0-8]\ds?\b|\bpocket watch\b|\bmanual wind(?:ing)?\b.*\b19|\b(?:ladies|lady|lady's|women'?s|womens|ladymatic|boys?)\b|\b(?:2[0-9]|3[0-3])\s?mm\b|tuning fork|\bgold[- ]?(?:tone|plated|filled)\b|\bgp\b|\bdial (?:&|and) hands\b|\bhands (?:&|and) dial\b|\bdial only\b|\bjunk\b|\bwatch king\b/i;
+
+/** Plated gold (gold-tone, gold-filled, cap gold, vermeil): the plating wears and these resell far under comps. */
+const PLATED = /\bgold[- ]?(?:tone|plated?|filled|fill|capped)\b|\bcap[- ]?gold\b|\bvermeil\b|\b(?:s?gp|rgp|gf|agf)\b|\b(?:10|14|18)k? gold (?:plated|filled)\b/i;
+/** eBay quartz: comps come mostly from automatic asks, so these looked far cheaper than they resell. */
+const EBAY_QUARTZ = /\bquartz\b|\bqz\b/i;
+
+/** Listings the scanner never keeps, by title. Also used to prune deals stored before a rule was added. */
+export function excludedListing(source: string, title: string): boolean {
+  if (NOT_WATCH.test(title) || ROUGH.test(title) || PLATED.test(title)) return true;
+  return source === "ebay" && (EBAY_VINTAGE.test(title) || EBAY_QUARTZ.test(title));
+}
 
 type Comp = { resale: number; basis: string; compCount: number; byName: boolean };
 
@@ -573,7 +584,7 @@ export async function scanWatchRecon(opts: ScanOptions): Promise<ScanResult> {
     const dealId = wk.replace(/[^A-Za-z0-9_.-]/g, "_");
     if (l.sold) { soldIds.push(dealId); continue; }
     if (Date.now() > opts.deadline) { outOfTime = true; break; }
-    if (!l.price || NOT_WATCH.test(l.title) || ROUGH.test(l.title) || ACCOUNT_BLOCKLIST.test(l.user)) continue;
+    if (!l.price || excludedListing("reddit", l.title) || ACCOUNT_BLOCKLIST.test(l.user)) continue;
 
     const evalKey = `wr:eval:${l.postId}`;
     if (done.has(l.postId)) continue;
@@ -652,8 +663,9 @@ export async function scanWatchRecon(opts: ScanOptions): Promise<ScanResult> {
 
 /**
  * Score eBay listings with the same live comps and rules as Reddit (reference
- * comps from WatchRecon asks), after stricter junk filtering: no vintage, ladies,
- * parts, rough or "as is" pieces, low-feedback sellers, or parts-condition items.
+ * comps from WatchRecon asks), after stricter junk filtering: no vintage, ladies or
+ * under-34mm, quartz, plated gold, parts, rough or "as is" pieces, low-feedback
+ * sellers, or parts-condition items.
  * Price includes shipping.
  */
 export async function scanEbay(listings: RawListing[], opts: ScanOptions): Promise<{ evaluated: number; deals: Deal[]; droppedIds: string[]; outOfTime: boolean }> {
@@ -665,7 +677,7 @@ export async function scanEbay(listings: RawListing[], opts: ScanOptions): Promi
   for (const l of listings) {
     if (Date.now() > opts.deadline) { outOfTime = true; break; }
     if (!l.price || l.price < PRICE_MIN) continue;
-    if (NOT_WATCH.test(l.title) || ROUGH.test(l.title) || EBAY_VINTAGE.test(l.title)) continue;
+    if (excludedListing("ebay", l.title)) continue;
     if (/parts|not working/i.test(l.condition ?? "")) continue;
     if (l.leafCategoryIds?.length && !l.leafCategoryIds.includes("31387")) continue;
     if ((l.sellerFeedback ?? 0) < 20 || (l.sellerPositivePct ?? 100) < 97) continue;

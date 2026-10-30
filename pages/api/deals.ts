@@ -5,7 +5,7 @@ import type { Deal } from "@/lib/types";
 /**
  * GET /api/deals -> { ok, deals, total } (newest-first as stored).
  * Optional ?limit=&offset= paginate the stored set (default: return all, capped
- * at 200 by getDeals). `total` is the full count before slicing.
+ * per source by getDeals). `total` is the full count before slicing.
  * Protected by middleware (requires the PIN cookie).
  */
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {

@@ -1,5 +1,6 @@
 import { Redis } from "@upstash/redis";
 import type { Deal } from "./types";
+import { excludedListing } from "./watchrecon";
 
 /**
  * Single shared Upstash client. Reads REST creds from env.
@@ -23,7 +24,9 @@ function redis(): Redis {
 
 const SEEN_TTL_SECONDS = 30 * 24 * 60 * 60; // 30 days
 const DEALS_KEY = "deals:store"; // hash: field = "{source}:{id}" -> Deal JSON
-const DEALS_MAX = 400; // cap returned to the dashboard (a full sweep finds ~270 Reddit + eBay deals)
+// Caps returned to the dashboard, per source, so a flood of eBay finds can't push out
+// older Reddit lowball targets (a full sweep finds ~270 Reddit deals).
+const DEALS_MAX: Record<string, number> = { reddit: 320, ebay: 120 };
 // Scanner deals are re-confirmed every 12h while the post is live (or reposted) and
 // eBay items are re-checked every 6h, so one unseen for 7 days is gone.
 const WR_PRUNE_MS = 7 * 24 * 60 * 60 * 1000;
@@ -136,7 +139,8 @@ export async function getDeals(): Promise<Deal[]> {
     const deal = typeof value === "string" ? safeParse<Deal>(value) : (value as Deal);
     if (!deal) continue;
     // Deals from the retired watchlist-median scorer (no `kind`) were mostly noise; drop them.
-    if (!deal.kind || silentTooLong(deal, now)) {
+    // Legacy watchlist deals, posts the seller stopped bumping, and titles a newer filter excludes.
+    if (!deal.kind || silentTooLong(deal, now) || excludedListing(deal.source, deal.title)) {
       expiredFields.push(field);
       continue;
     }
@@ -155,8 +159,12 @@ export async function getDeals(): Promise<Deal[]> {
     }
   }
 
-  keep.sort((a, b) => (b.foundAt || 0) - (a.foundAt || 0));
-  return keep.slice(0, DEALS_MAX);
+  // Newest first, but deals the AI review marked "skip" go last so the caps drop them first.
+  const skipped = (d: Deal) => (d.ai?.verdict === "skip" ? 1 : 0);
+  keep.sort((a, b) => skipped(a) - skipped(b) || (b.foundAt || 0) - (a.foundAt || 0));
+  const taken: Record<string, number> = {};
+  const capped = keep.filter((d) => (taken[d.source] = (taken[d.source] ?? 0) + 1) <= (DEALS_MAX[d.source] ?? 120));
+  return capped.sort((a, b) => (b.foundAt || 0) - (a.foundAt || 0));
 }
 
 function safeParse<T>(s: string): T | null {
