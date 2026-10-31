@@ -37,6 +37,13 @@ const DAY = 24 * 60 * 60 * 1000;
 function sellsFast(d: Deal): boolean {
   return d.kind === "fresh" || (d.kind === "cheap" && !d.maxOffer);
 }
+/**
+ * Priced with the old 93%-of-median-ask resale (its comp basis predates the "sells ~$"
+ * wording). Still-live listings come back re-priced the next time the scanner sees them.
+ */
+function oldResale(d: Deal): boolean {
+  return Boolean(d.compBasis) && d.compBasis !== "model table" && !d.compBasis!.includes("sells ~$");
+}
 function silentTooLong(d: Deal, now: number): boolean {
   if (d.source !== "reddit" || !d.lastPostedAt) return false;
   return now - d.lastPostedAt > (sellsFast(d) ? 1.5 : 14) * DAY;
@@ -140,7 +147,7 @@ export async function getDeals(): Promise<Deal[]> {
     if (!deal) continue;
     // Deals from the retired watchlist-median scorer (no `kind`) were mostly noise; drop them.
     // Legacy watchlist deals, posts the seller stopped bumping, and titles a newer filter excludes.
-    if (!deal.kind || silentTooLong(deal, now) || excludedListing(deal.source, deal.title)) {
+    if (!deal.kind || silentTooLong(deal, now) || excludedListing(deal.source, deal.title) || oldResale(deal)) {
       expiredFields.push(field);
       continue;
     }
