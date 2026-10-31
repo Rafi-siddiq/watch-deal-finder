@@ -27,8 +27,14 @@ const QUICK_PAGES = 2;
 /** Reddit resale: ~3.5% PayPal G&S fee + ~$30 insured shipping. */
 const SALE_KEEP = 0.965;
 const SALE_COST = 30;
-/** Comps are other sellers' asks; watches sell a little under ask, so profit math uses 93% of the median ask. */
-const ASK_TO_SALE = 0.93;
+/**
+ * Resale for profit math is conservative: the median of posts marked sold when there are
+ * 3+, else the lower of the cheapest quarter of other sellers' asks and 90% of the median
+ * (with under 8 asks the quartile isn't used, so one lowball ask can't set it). Median
+ * asks overstated what watches sell for.
+ */
+const QUARTILE_MIN_ASKS = 8;
+const SMALL_SAMPLE_RATIO = 0.9;
 /** Target profit for a lowball buy (the user's flip goal). */
 const LOWBALL_TARGET_NET = 400;
 /** A listing must have been up this long (across reposts) to be lowball-able. */
@@ -70,7 +76,7 @@ const ACCOUNT_BLOCKLIST = /^(Motor-Special6097|Consistent-Sir629|Evening-Quit-68
  * get a haircut and the card says to check eBay sold first.
  */
 const VINTAGE = /\bvintage\b|\b19[4-8]\d\b|pie ?pan|\bcal\.? ?[3-7]\d\d\b|\bbumper\b|crosshair|\bc-?case\b|king seiko|lord marvel|\b61gs\b/i;
-const VINTAGE_HAIRCUT = 0.75;
+const VINTAGE_HAIRCUT = 0.85;
 
 /** Variants that price very differently from the base model: similar-title comps must agree on each. */
 // TAG chronographs are often listed by calibre, name or ref (Carrera Calibre 16, Glassbox, Heuer 02, CV2010) without "chrono".
@@ -222,26 +228,62 @@ export function refOf(t: string): string | null {
 }
 
 /** A brand slug ("audemars-piguet") appears in a title ("Audemars Piguet Royal Oak 15210"). */
+/** Asks for one comparable set: count, median, cheapest quarter, and asks of posts marked sold. */
+interface AskStats {
+  n: number;
+  med: number;
+  low: number;
+  soldN: number;
+  soldMed?: number;
+}
+
+const at = (sorted: number[], q: number) => sorted[Math.floor((sorted.length - 1) * q)];
+
+function askStats(asks: { price: number; sold: boolean }[]): AskStats | null {
+  const prices = asks.map((a) => a.price).sort((a, b) => a - b);
+  if (prices.length < 4) return null;
+  const sold = asks.filter((a) => a.sold).map((a) => a.price).sort((a, b) => a - b);
+  const med = at(prices, 0.5);
+  return {
+    n: prices.length,
+    med,
+    low: prices.length >= QUARTILE_MIN_ASKS ? at(prices, 0.25) : Math.round(med * SMALL_SAMPLE_RATIO),
+    soldN: sold.length,
+    soldMed: sold.length ? at(sold, 0.5) : undefined,
+  };
+}
+
+/**
+ * Conservative likely sale price, and how it was found: sold posts when there are enough,
+ * else the lower of the cheapest quarter of asks and 90% of the median ask (bunched asks
+ * put the cheapest quarter close to the median, and watches still sell under ask).
+ */
+function likelySale(st: AskStats): { sale: number; how: string } {
+  if (st.soldN >= 3 && st.soldMed !== undefined) return { sale: Math.min(st.soldMed, st.med), how: `median of ${st.soldN} sold` };
+  const ninety = Math.round(st.med * SMALL_SAMPLE_RATIO);
+  return st.low < ninety ? { sale: st.low, how: "cheapest quarter of asks" } : { sale: ninety, how: "90% of median ask" };
+}
+
 function titleHasBrand(title: string, slug: string): boolean {
   const norm = (x: string) => ` ${x.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim()} `;
   return slug !== "" && norm(title).includes(norm(slug.replace(/-/g, " ")));
 }
 
 /**
- * Median of other sellers' asks for a reference (all time), from the same brand only:
- * reference numbers collide across brands (Rolex 15210 vs Audemars Piguet 15210).
- * Raw asks are cached 24h per reference; the brand/seller filtering happens per listing.
+ * Other sellers' asks for a reference (all time), from the same brand only: reference
+ * numbers collide across brands (Rolex 15210 vs Audemars Piguet 15210). Raw asks (with
+ * WatchRecon's sold flag) are cached 24h per reference; brand/seller filtering is per listing.
  */
-async function compFor(ref: string, seller: string, title: string): Promise<{ n: number; med: number } | null> {
-  const key = `wr:comp2:${ref}`;
-  let asks = await redis().get<[number, string, string][]>(key);
+async function compFor(ref: string, seller: string, title: string): Promise<AskStats | null> {
+  const key = `wr:comp3:${ref}`;
+  let asks = await redis().get<[number, string, string, boolean][]>(key);
   if (!asks) {
     // Digit boundaries so 15210 doesn't match 115210; letters may prefix (M79360N vs 79360N).
     const re = new RegExp(`(?<![0-9])${ref.replace(/[.]/g, "\\.?").replace(/-/g, "-?")}(?![0-9])`, "i");
     asks = [];
     for (let p = 1; p <= 3; p++) {
       const { items, full } = await getPage({ query: ref, last_days: 0, price_start: PRICE_MIN, price_end: 30000, current_page: p });
-      for (const i of items) if (i.price && re.test(i.title) && !NOT_WATCH.test(i.title)) asks.push([i.price, i.user, i.brand.toLowerCase()]);
+      for (const i of items) if (i.price && re.test(i.title) && !NOT_WATCH.test(i.title)) asks.push([i.price, i.user, i.brand.toLowerCase(), i.sold]);
       if (!full) break;
       await sleep(400);
     }
@@ -255,8 +297,7 @@ async function compFor(ref: string, seller: string, title: string): Promise<{ n:
     const top = brands.map((b) => others.filter(([, , x]) => x === b)).sort((a, b2) => b2.length - a.length)[0] ?? [];
     pool = top.length >= 0.8 * others.length ? top : [];
   }
-  const prices = pool.map(([p]) => p).sort((a, b) => a - b);
-  return prices.length >= 4 ? { n: prices.length, med: prices[Math.floor((prices.length - 1) / 2)] } : null;
+  return askStats(pool.map(([price, , , sold]) => ({ price, sold: Boolean(sold) })));
 }
 
 const NAME_NOISE = new Set(
@@ -275,21 +316,21 @@ function nameTokens(t: string): string[] {
 }
 
 /**
- * Median ask of similar listings (same brand/model words, same size when stated,
+ * Asks of similar listings (same brand/model words, same size when stated,
  * quartz/chrono/GMT/moonphase/gold/diamond variants kept apart), other sellers only. Cached 24h.
  */
-async function compByName(l: WrListing): Promise<{ n: number; med: number } | null> {
+async function compByName(l: WrListing): Promise<AskStats | null> {
   const tokens = nameTokens(l.title);
   if (tokens.length < 3) return null;
   const sig = variantSig(l.title);
-  const key = `wr:ncomp4:${tokens.join("-")}:${sig}`;
-  const cached = await redis().get<{ n: number; med: number } | "none">(key);
+  const key = `wr:ncomp5:${tokens.join("-")}:${sig}`;
+  const cached = await redis().get<AskStats | "none">(key);
   if (cached) return cached === "none" ? null : cached;
 
   const mm = caseSizeOf(l.title);
   const need = tokens.length >= 4 ? 3 : tokens.length;
   const items = await get({ query: tokens.filter((w) => !/mm$/.test(w)).slice(0, 3).join(" "), last_days: 0, price_start: PRICE_MIN, price_end: 30000 });
-  const prices = items
+  const asks = items
     .filter((i) => {
       if (!i.price || i.user === l.user || NOT_WATCH.test(i.title) || variantSig(i.title) !== sig || !sameLine(l.title, i.title)) return false;
       const other = caseSizeOf(i.title);
@@ -297,9 +338,8 @@ async function compByName(l: WrListing): Promise<{ n: number; med: number } | nu
       const have = new Set(nameTokens(i.title).concat(i.title.toLowerCase().split(/[^a-z0-9.']+/)));
       return tokens.filter((w) => have.has(w)).length >= need;
     })
-    .map((i) => i.price)
-    .sort((a, b) => a - b);
-  const comp = prices.length >= 4 ? { n: prices.length, med: prices[Math.floor((prices.length - 1) / 2)] } : null;
+    .map((i) => ({ price: i.price, sold: i.sold }));
+  const comp = askStats(asks);
   await redis().set(key, comp ?? "none", { ex: DAY_MS / 1000 });
   return comp;
 }
@@ -439,33 +479,41 @@ function ebayCaseMm(det: EbayItemDetails | null): number | undefined {
   return v >= 20 && v <= 50 ? v : undefined;
 }
 
-type Comp = { resale: number; basis: string; compCount: number; byName: boolean };
+/** ask: median of other sellers' asks (is it priced under the market?); resale: conservative likely sale (profit math). */
+type Comp = { ask: number; resale: number; basis: string; compCount: number; byName: boolean };
 
 /** Reference comps first, then the model table, then (when allowed) similar titles. Vintage comps get a haircut. */
 async function compOf(title: string, seller: string, allowName: boolean): Promise<Comp | null> {
   const c = await rawCompOf(title, seller, allowName);
   if (!c || !VINTAGE.test(title)) return c;
-  return { ...c, resale: Math.round(c.resale * VINTAGE_HAIRCUT), basis: `${c.basis}, vintage −${Math.round((1 - VINTAGE_HAIRCUT) * 100)}%` };
+  const cut = (v: number) => Math.round(v * VINTAGE_HAIRCUT);
+  return { ...c, ask: cut(c.ask), resale: cut(c.resale), basis: `${c.basis}, vintage −${Math.round((1 - VINTAGE_HAIRCUT) * 100)}%` };
+}
+
+function fromStats(st: AskStats, what: string, byName: boolean): Comp {
+  const { sale, how } = likelySale(st);
+  return { ask: st.med, resale: sale, basis: `${what}: sells ~$${sale} (${how}), median ask $${st.med}, ${st.n} asks`, compCount: st.n, byName };
 }
 
 async function rawCompOf(title: string, seller: string, allowName: boolean): Promise<Comp | null> {
   const ref = refOf(title);
   if (ref) {
     const c = await compFor(ref, seller, title);
-    if (c) return { resale: c.med, basis: `${ref} median of ${c.n} asks`, compCount: c.n, byName: false };
+    if (c) return fromStats(c, ref, false);
   }
   const m = MODEL_COMPS.find(([re]) => re.test(title));
-  if (m) return { resale: m[1], basis: "model table", compCount: 0, byName: false };
+  // Table values are typical asks; what these sell for is a bit lower.
+  if (m) return { ask: m[1], resale: Math.round(m[1] * SMALL_SAMPLE_RATIO), basis: "model table", compCount: 0, byName: false };
   if (allowName) {
     const c = await compByName({ title, user: seller } as WrListing);
-    if (c) return { resale: c.med, basis: `median of ${c.n} similar listings`, compCount: c.n, byName: true };
+    if (c) return fromStats(c, "similar listings", true);
   }
   return null;
 }
 
 interface Verdict {
   kind: NonNullable<Deal["kind"]>;
-  /** Likely sale price (asks discounted to what watches actually sell for). */
+  /** Conservative likely sale price (sold posts, else the cheapest quarter of asks). */
   sale: number;
   net: number;
   maxOffer: number;
@@ -477,13 +525,13 @@ interface Verdict {
  * daysUp is null when the age is unknown (then lowball kinds are skipped).
  */
 function judge(price: number, comp: Comp, title: string, daysUp: number | null, opts: ScanOptions, flagged: boolean): Verdict | null {
-  const { resale, byName } = comp;
-  // ratio compares to asks (is this priced under the market?); profit uses the likely sale price.
-  const sale = Math.round(resale * ASK_TO_SALE);
+  const { ask, resale, byName } = comp;
+  // ratio compares to the median ask (is this priced under the market?); profit uses the conservative sale price.
+  const sale = resale;
   const net = netAt(sale, price);
   const maxOffer = Math.round(SALE_KEEP * sale - SALE_COST - LOWBALL_TARGET_NET);
   const microOffer = Math.round(SALE_KEEP * sale - SALE_COST - MICRO_TARGET_NET);
-  const ratio = price / resale;
+  const ratio = price / ask;
   const cap = (s: number) => Math.max(0, Math.min(flagged ? 65 : 100, Math.round(s) - (flagged ? 15 : 0)));
   const aged = daysUp !== null && daysUp >= LOWBALL_MIN_DAYS;
 
@@ -519,7 +567,7 @@ function judge(price: number, comp: Comp, title: string, daysUp: number | null, 
  * price?), the likely sale price for flips (what you'd actually get reselling).
  */
 function shownPrice(v: Verdict, comp: Comp): number {
-  return v.kind === "collection" || v.kind === "micro" ? comp.resale : v.sale;
+  return v.kind === "collection" || v.kind === "micro" ? comp.ask : v.sale;
 }
 
 /** Profit shown on the card: at asking, or the target an offer is sized to hit. */
@@ -611,7 +659,7 @@ export async function scanWatchRecon(opts: ScanOptions): Promise<ScanResult> {
   let outOfTime = false;
   // WatchRecon lists newest first, so the first post per seller+watch is the live one.
   const seenWatches = new Set<string>();
-  const done = await alreadyEvaluated("wr:eval:", listings.map((l) => l.postId));
+  const done = await alreadyEvaluated("wr:eval3:", listings.map((l) => l.postId));
 
   for (const l of listings) {
     const wk = watchKey(l);
@@ -623,7 +671,7 @@ export async function scanWatchRecon(opts: ScanOptions): Promise<ScanResult> {
     if (Date.now() > opts.deadline) { outOfTime = true; break; }
     if (!l.price || excludedListing("reddit", l.title) || ACCOUNT_BLOCKLIST.test(l.user)) continue;
 
-    const evalKey = `wr:eval:${l.postId}`;
+    const evalKey = `wr:eval3:${l.postId}`;
     if (done.has(l.postId)) continue;
     evaluated++;
     judged.push(dealId);
@@ -632,7 +680,7 @@ export async function scanWatchRecon(opts: ScanOptions): Promise<ScanResult> {
     await redis().set(evalKey, 1, { ex: 12 * 3600 });
     if (!comp) continue;
     // Under 30% of comps is a part/accessory the filter missed, a typo, or a scam — never a real deal.
-    if (l.price < 0.3 * comp.resale) continue;
+    if (l.price < 0.3 * comp.ask) continue;
     // Cheap pre-check (no history yet): could this be anything at all?
     if (!judge(l.price, comp, l.title, 9999, opts, false)) continue;
 
@@ -640,7 +688,7 @@ export async function scanWatchRecon(opts: ScanOptions): Promise<ScanResult> {
     const daysUp = Math.floor((Date.now() - h.firstPostedAt) / DAY_MS);
     const sellerDays = Math.floor((Date.now() - h.sellerSince) / DAY_MS);
     const flags: string[] = [];
-    if (l.price < SCAM_RATIO * comp.resale) flags.push(`${Math.round((1 - l.price / comp.resale) * 100)}% under comps — classic scam pattern, vet hard`);
+    if (l.price < SCAM_RATIO * comp.ask) flags.push(`${Math.round((1 - l.price / comp.ask) * 100)}% under comps — classic scam pattern, vet hard`);
     if (h.totalPosts <= 2 && sellerDays < 30) flags.push("New seller: little or no posting history");
     if (comp.basis === "model table") flags.push("Comp from model table, not live asks — confirm variant/size");
     const vintage = VINTAGE.test(l.title);
@@ -661,7 +709,7 @@ export async function scanWatchRecon(opts: ScanOptions): Promise<ScanResult> {
       imageUrl: l.imageUrl,
       model: ref ?? "",
       median: shownPrice(v, comp),
-      discount: Math.max(0, 1 - l.price / comp.resale),
+      discount: Math.max(0, 1 - l.price / comp.ask),
       score: v.score,
       scoreModifier: 1,
       underDescribed: false,
@@ -710,7 +758,7 @@ export async function scanEbay(listings: RawListing[], opts: ScanOptions): Promi
   let evaluated = 0;
   let outOfTime = false;
   const judgedEbay: string[] = [];
-  const done = await alreadyEvaluated("wr:eeval2:", listings.map((l) => l.id));
+  const done = await alreadyEvaluated("wr:eeval3:", listings.map((l) => l.id));
   for (const l of listings) {
     if (Date.now() > opts.deadline) { outOfTime = true; break; }
     if (!l.price || l.price < PRICE_MIN) continue;
@@ -719,7 +767,7 @@ export async function scanEbay(listings: RawListing[], opts: ScanOptions): Promi
     if (l.leafCategoryIds?.length && !l.leafCategoryIds.includes("31387")) continue;
     if ((l.sellerFeedback ?? 0) < 20 || (l.sellerPositivePct ?? 100) < 97) continue;
 
-    const evalKey = `wr:eeval2:${l.id}`;
+    const evalKey = `wr:eeval3:${l.id}`;
     if (done.has(l.id)) continue;
     evaluated++;
     judgedEbay.push(l.id);
@@ -729,7 +777,7 @@ export async function scanEbay(listings: RawListing[], opts: ScanOptions): Promi
     await redis().set(evalKey, 1, { ex: 12 * 3600 });
     if (!comp) continue;
     const total = l.price + (l.shippingCost ?? 0);
-    if (total < 0.3 * comp.resale) continue;
+    if (total < 0.3 * comp.ask) continue;
     // Cheap pre-check, then read the listing itself: titles often leave out quartz, size and
     // condition, which is where most of the bad resale estimates came from.
     if (!judge(total, comp, l.title, 9999, opts, false)) continue;
@@ -740,7 +788,7 @@ export async function scanEbay(listings: RawListing[], opts: ScanOptions): Promi
 
     const daysUp = Math.max(0, Math.floor((Date.now() - l.createdAt) / DAY_MS));
     const flags: string[] = [];
-    if (total < SCAM_RATIO * comp.resale) flags.push(`${Math.round((1 - total / comp.resale) * 100)}% under comps — check it's the real model, complete and genuine`);
+    if (total < SCAM_RATIO * comp.ask) flags.push(`${Math.round((1 - total / comp.ask) * 100)}% under comps — check it's the real model, complete and genuine`);
     if (comp.basis === "model table") flags.push("Comp from model table, not live asks — confirm variant/size");
     if (l.shippingCost === undefined) flags.push("Shipping cost not shown — check before buying");
     if (!det) flags.push("Listing details unavailable — check movement, size and condition");
@@ -759,7 +807,7 @@ export async function scanEbay(listings: RawListing[], opts: ScanOptions): Promi
       imageUrl: l.imageUrl,
       model: ref ?? "",
       median: shownPrice(v, comp),
-      discount: Math.max(0, 1 - total / comp.resale),
+      discount: Math.max(0, 1 - total / comp.ask),
       score: v.score,
       scoreModifier: 1,
       underDescribed: false,

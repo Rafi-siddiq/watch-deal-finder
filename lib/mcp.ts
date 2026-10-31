@@ -30,7 +30,8 @@ const TOOLS = [
       "Search the watch deals the scanner has found on r/Watchexchange, r/watch_swap and eBay (re-scanned every 15 minutes). " +
       "Kinds: fresh = underpriced flip at asking; lowball = 21+ days unsold, make an offer up to maxOffer; cheap = flips under $1,500; " +
       "micro = microbrands (Traska, Farer, Christopher Ward...); collection = under 40mm, at least 10% under resale, for the owner's own collection. " +
-      "resale is the median ask of comparable listings; pctOfResale under 75 with estNet >= 150 is the owner's flip bar. " +
+      "resale is the conservative likely sale price for flips (median of sold posts, else the cheapest quarter of same-model asks) and the median ask for collection/micro; " +
+      "pctOfResale under 75 with estNet >= 150 is the owner's flip bar. " +
       "Always show the url, and for Reddit sellers the uslUrl (Universal Scammer List check). Flags and ai.note list known problems.",
     inputSchema: {
       type: "object",
@@ -71,8 +72,8 @@ const TOOLS = [
     description:
       "Search right now, not the stored deals: r/Watchexchange + r/watch_swap (via WatchRecon) and eBay Buy It Now, newest first. " +
       "Use a model or reference, e.g. \"spb155\", \"tudor prince 76200\", \"nomos club campus 38\". " +
-      "comps is the median of every Reddit ask for the same search (all time, mixed variants and condition), so pctOfMedian is a rough guide; " +
-      "used watches usually sell 5-10% under the median ask. Reddit results marked sold are kept for price context. Always show url and, for Reddit, uslUrl.",
+      "comps are every Reddit ask for the same search (all time, mixed variants and condition): treat low25 (the cheapest quarter) as the realistic resale, " +
+      "not medianAsk, and search by reference number for tight comps. Reddit results marked sold are kept for price context. Always show url and, for Reddit, uslUrl.",
     inputSchema: {
       type: "object",
       properties: {

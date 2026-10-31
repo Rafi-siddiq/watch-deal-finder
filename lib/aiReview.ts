@@ -134,7 +134,7 @@ async function brief(d: Deal): Promise<string> {
     `Deal type: ${d.kind}`,
     `Title: ${d.title}`,
     `Asking: $${d.price}${d.source === "ebay" && d.shippingIncluded !== undefined ? ` (includes $${d.shippingIncluded} shipping)` : ""}`,
-    `Comparison: ~$${d.median} ${d.kind === "collection" || d.kind === "micro" ? "(what other sellers ask)" : "(likely sale price: 93% of the median ask)"} — ${d.compBasis ?? "unknown basis"}`,
+    `Comparison: ~$${d.median} ${d.kind === "collection" || d.kind === "micro" ? "(what other sellers ask)" : "(conservative likely sale price: median of sold posts, else the cheapest quarter of same-model asks)"} — ${d.compBasis ?? "unknown basis"}`,
     d.kind === "lowball" || ((d.kind === "micro" || d.kind === "cheap") && (d.maxOffer ?? 0) >= 0.5 * d.price)
       ? `Max offer that still hits the profit target: $${d.maxOffer}`
       : d.kind === "collection" || d.kind === "micro"
