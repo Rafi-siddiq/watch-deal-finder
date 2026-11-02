@@ -3,6 +3,9 @@ import { safeEqual } from "@/lib/auth";
 import { handleRpc, type RpcMessage } from "@/lib/mcp";
 import { getDeals } from "@/lib/redis";
 
+// live_search also reads seller comments from the archive (no-price posts, sold checks), ~15-30s.
+export const config = { maxDuration: 60 };
+
 /**
  * POST /api/mcp/{MCP_SECRET} — MCP endpoint for a Claude custom connector.
  * The secret lives in the path because Claude's custom connectors take a plain URL.

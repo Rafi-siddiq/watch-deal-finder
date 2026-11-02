@@ -1,6 +1,7 @@
 import { searchEbayLive } from "./ebay";
 import type { Deal } from "./types";
 import { parseWhen, searchListings } from "./watchrecon";
+import { fetchPostInfo, soldPosts } from "./postItems";
 import { recentDrops } from "./drops";
 
 /**
@@ -199,6 +200,8 @@ export function dealStats(deals: Deal[], now = Date.now()) {
   return { total: deals.length, byKind, bySource, newestFoundHoursAgo: newest ? hoursAgo(newest, now) : null };
 }
 
+type WrListingLike = Awaited<ReturnType<typeof searchListings>>[number];
+
 const quantile = (sorted: number[], q: number) => sorted[Math.min(sorted.length - 1, Math.floor(q * (sorted.length - 1)))];
 
 /** Fresh Reddit + eBay results for one query, priced against all-time Reddit asks for the same query. */
@@ -218,6 +221,34 @@ export async function liveSearch(args: Record<string, unknown>, now = Date.now()
     sources.includes("ebay") ? searchEbayLive(query, { minPrice, maxPrice, limit }).catch((e) => (errors.push(`ebay: ${e.message}`), [])) : [],
   ]);
 
+  // Posts with no title price (most multi-watch "collection" posts): price them from the seller's comment.
+  const unpriced = sources.includes("reddit")
+    ? await searchListings(query, { days, unpricedOnly: true, pages: 2 }).catch((e) => (errors.push(`unpriced: ${e.message}`), []))
+    : [];
+  const fromComments: (WrListingLike & { item?: string })[] = [];
+  const started = Date.now();
+  {
+    // The archive takes ~0.5s a post (rate-limited), so this is time-boxed: unpriced posts first, then sold checks.
+    const infos: ({ l: WrListingLike; info: Awaited<ReturnType<typeof fetchPostInfo>> } | null)[] = [];
+    for (const l of unpriced.slice(0, 30)) {
+      if (Date.now() - started > 18_000) break;
+      infos.push(await fetchPostInfo(l.postId, l.user, l.title).then((info) => ({ l, info })).catch(() => null));
+    }
+    for (const r of infos) {
+      if (!r || r.info.sold || !r.info.items) continue;
+      const multi = r.info.items.length > 1;
+      for (const it of r.info.items) {
+        if ((minPrice !== undefined && it.price < minPrice) || (maxPrice !== undefined && it.price > maxPrice)) continue;
+        fromComments.push({ ...r.l, price: it.price, item: multi ? it.name : undefined });
+      }
+    }
+  }
+  // Sellers mark sales in the comments ("SOLD", "sale pending"); WatchRecon often misses it.
+  const shown = [...recent.slice(0, limit), ...fromComments];
+  const archiveSold = new Set(
+    (await soldPosts(shown.filter((l) => !l.sold).map((l) => ({ postId: l.postId, author: l.user })), started + 38_000).catch(() => ({ sold: [] as string[] }))).sold,
+  );
+
   const asks = history.map((h) => h.price).filter((p) => p > 0).sort((a, b) => a - b);
   const median = asks.length >= 4 ? quantile(asks, 0.5) : undefined;
   const pct = (p: number) => (median ? Math.round((p / median) * 100) : undefined);
@@ -227,12 +258,13 @@ export async function liveSearch(args: Record<string, unknown>, now = Date.now()
     comps: median
       ? { medianAsk: median, low25: quantile(asks, 0.25), high75: quantile(asks, 0.75), asks: asks.length, soldPosts: history.filter((h) => h.sold).length }
       : { note: `Only ${asks.length} Reddit asks found; no reliable median.` },
-    reddit: recent.slice(0, limit).map((l) => ({
-      title: l.title,
+    reddit: shown.map((l: WrListingLike & { item?: string }) => ({
+      title: l.item ? `${l.item} — in multi-watch post “${l.title}”` : l.title,
       price: l.price,
+      priceFrom: l.item !== undefined || fromComments.includes(l) ? "seller comment (no price in title)" : undefined,
       pctOfMedian: l.price ? pct(l.price) : undefined,
       postedHoursAgo: hoursAgo(parseWhen(l.when, now), now),
-      sold: l.sold || undefined,
+      sold: l.sold || archiveSold.has(l.postId) || undefined,
       seller: l.user,
       sub: l.sub,
       url: l.url,

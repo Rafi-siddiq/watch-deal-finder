@@ -2,13 +2,14 @@ import { scanWatchRecon, scanEbay, ebayDetailsCached, ebayDetailProblem, type Sc
 import { fetchEbayListings, ebayItemAvailable } from "./ebay";
 import { upsertDeal, removeDeals, getDeals, soldMarked } from "./redis";
 import { checkRedditPosts, redditApiConfigured } from "./redditApi";
+import { soldPosts } from "./postItems";
 import { aiReviewConfigured, reviewDeals } from "./aiReview";
 import type { Deal } from "./types";
 
 export interface ScanSummary {
   reddit: { ok: boolean; fetched: number; evaluated: number; stored: number; outOfTime: boolean; error?: string };
   ebay: { ok: boolean; skipped?: boolean; fetched: number; evaluated: number; stored: number; outOfTime: boolean; failedBrands?: string[]; error?: string };
-  removed: { sold: number; ebayEnded: number; redditGone: number };
+  removed: { sold: number; ebayEnded: number; redditGone: number; redditSold?: number };
   tookMs: number;
 }
 
@@ -97,6 +98,7 @@ export async function runScan(days: number, budget: ScanBudget = SERVERLESS): Pr
   try {
     const deals = await getDeals();
     summary.removed.ebayEnded = await dropEndedEbay(deals, started + budget.cleanupMs);
+    summary.removed.redditSold = await dropSoldReddit(deals, started + budget.cleanupMs);
     if (redditApiConfigured()) summary.removed.redditGone = await dropGoneReddit(deals);
   } catch (e) {
     console.error("[scan] sold check failed:", (e as Error).message);
@@ -121,6 +123,7 @@ async function store(deals: Deal[]): Promise<number> {
       // Keep the AI review at the same price, and what the Reddit checker learned about this post.
       ai: prev?.ai && prev.ai.price === fresh.price ? prev.ai : undefined,
       redditCheckedAt: prev?.url === fresh.url ? prev?.redditCheckedAt : undefined,
+      archiveCheckedAt: prev?.url === fresh.url ? prev?.archiveCheckedAt : undefined,
       trades: prev?.seller === fresh.seller ? prev?.trades : undefined,
     };
     try {
@@ -153,6 +156,35 @@ async function dropEndedEbay(deals: Deal[], deadline: number): Promise<number> {
     }
   }
   if (gone.length) await removeDeals("ebay", gone);
+  return gone.length;
+}
+
+const ARCHIVE_RECHECK_MS = 90 * 60 * 1000;
+const ARCHIVE_CHECKS_PER_RUN = 60;
+
+/**
+ * Reddit deals the seller has since marked "SOLD" / "sale pending" in the comments (read from
+ * the Arctic Shift archive, since Reddit blocks our servers): remove them. Oldest-checked first,
+ * a few dozen per run, so every deal is re-checked about every 90 minutes.
+ */
+async function dropSoldReddit(deals: Deal[], deadline: number): Promise<number> {
+  const due = deals
+    .filter((d) => d.source === "reddit" && d.seller && Date.now() - (d.archiveCheckedAt || 0) > ARCHIVE_RECHECK_MS)
+    .sort((a, b) => (a.archiveCheckedAt || 0) - (b.archiveCheckedAt || 0))
+    .slice(0, ARCHIVE_CHECKS_PER_RUN);
+  const byPost = new Map<string, Deal[]>();
+  for (const d of due) {
+    const postId = d.url.match(/comments\/([a-z0-9]+)/i)?.[1];
+    if (postId) byPost.set(postId, [...(byPost.get(postId) ?? []), d]);
+  }
+  const { sold, checked } = await soldPosts([...byPost].map(([postId, ds]) => ({ postId, author: ds[0].seller! })), deadline);
+  const gone = sold.flatMap((p) => byPost.get(p) ?? []).map((d) => d.id);
+  if (gone.length) await removeDeals("reddit", gone);
+  const now = Date.now();
+  for (const p of checked) {
+    if (sold.includes(p)) continue;
+    for (const d of byPost.get(p) ?? []) await upsertDeal({ ...d, archiveCheckedAt: now }).catch(() => {});
+  }
   return gone.length;
 }
 

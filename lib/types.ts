@@ -143,6 +143,8 @@ export interface Deal {
   ai?: AiReview;
   /** Last time the GitHub checker confirmed the Reddit post is still up (Unix ms). */
   redditCheckedAt?: number;
+  /** Last time the archive was checked for a seller "SOLD"/"pending" comment on this post. */
+  archiveCheckedAt?: number;
   /** Seller's Reddit trade count from the sub's bot comment, when the checker found it. */
   trades?: number;
 }

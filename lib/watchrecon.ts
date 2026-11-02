@@ -1,3 +1,4 @@
+import { fetchPostInfo, type PostItem } from "./postItems";
 import { Redis } from "@upstash/redis";
 import type { Deal, RawListing } from "./types";
 import { ebayItemDetails, type EbayItemDetails } from "./ebay";
@@ -108,6 +109,8 @@ export interface WrListing {
   sub: "Watchexchange" | "watch_swap";
   brand: string;
   imageUrl?: string;
+  /** For one watch out of a multi-watch post: the post's own title (title is then the watch's name). */
+  postTitle?: string;
 }
 
 // --- Redis (same Upstash creds as lib/redis.ts) ---
@@ -173,10 +176,14 @@ async function get(params: Record<string, string | number>, sources: string[] = 
 }
 
 /** Live keyword search of r/WE + r/watch_swap via WatchRecon (newest first), straps/parts/WTB dropped. days 0 = all time. */
-export async function searchListings(query: string, opts: { days: number; priceMin?: number; priceMax?: number; pages?: number }): Promise<WrListing[]> {
+export async function searchListings(query: string, opts: { days: number; priceMin?: number; priceMax?: number; pages?: number; unpricedOnly?: boolean }): Promise<WrListing[]> {
   const out: WrListing[] = [];
   for (let p = 1; p <= (opts.pages ?? 1); p++) {
-    const { items, full } = await getPage({ query, last_days: opts.days, price_start: opts.priceMin ?? PRICE_MIN, price_end: opts.priceMax ?? 30000, current_page: p });
+    // WatchRecon's price filter drops posts with no title price, so those need an unfiltered read.
+    const priceParams: Record<string, number> = opts.unpricedOnly ? {} : { price_start: opts.priceMin ?? PRICE_MIN, price_end: opts.priceMax ?? 30000 };
+    const page = await getPage({ query, last_days: opts.days, ...priceParams, current_page: p });
+    const { full } = page;
+    const items = opts.unpricedOnly ? page.items.filter((i) => !i.price) : page.items;
     out.push(...items.filter((i) => !NOT_WATCH.test(i.title)));
     if (!full) break;
   }
@@ -613,6 +620,48 @@ export interface ScanResult {
   outOfTime: boolean;
 }
 
+/** Posts without a title price checked per run (each costs one archive request). */
+const PRICELESS_PER_RUN = 30;
+
+/**
+ * About one post in eight has no price in its title — single watches priced in the comments and
+ * most multi-watch "collection" posts — so WatchRecon shows no price and the main pass skips them.
+ * Read the newest pages without a price filter and price those posts from the seller's comment.
+ * Multi-watch posts become one listing per watch.
+ */
+async function pricelessListings(opts: ScanOptions): Promise<WrListing[]> {
+  const raw: WrListing[] = [];
+  for (const src of SOURCES) {
+    for (let n = 1; n <= QUICK_PAGES; n++) {
+      const page = await getPage({ last_days: opts.days, current_page: n }, [src]).catch(() => null);
+      if (!page) break;
+      raw.push(...page.items.filter((l) => !l.price && !l.sold && !excludedListing("reddit", l.title) && !ACCOUNT_BLOCKLIST.test(l.user)));
+      if (!page.full) break;
+    }
+  }
+  const out: WrListing[] = [];
+  let fetched = 0;
+  for (const l of raw) {
+    if (Date.now() > opts.deadline) break;
+    const key = `wr:items:${l.postId}`;
+    let items = await redis().get<PostItem[] | "pending" | "sold">(key);
+    if (items === null && fetched < PRICELESS_PER_RUN) {
+      fetched++;
+      const info = await fetchPostInfo(l.postId, l.user, l.title).catch(() => null);
+      if (!info) continue;
+      items = info.sold ? "sold" : info.items ?? "pending";
+      // The archive lags a few minutes behind Reddit: retry a missing description soon.
+      await redis().set(key, items, { ex: items === "pending" ? 20 * 60 : 24 * 3600 });
+    }
+    if (!Array.isArray(items)) continue;
+    items.forEach((it, i) => {
+      const multi = items.length > 1;
+      out.push({ ...l, postId: multi ? `${l.postId}_${i}` : l.postId, title: multi ? it.name : l.title, price: it.price, postTitle: multi ? l.title : undefined });
+    });
+  }
+  return out;
+}
+
 /**
  * Pull recent RWX + RWS posts, comp each one, and flag fresh flips, lowballs,
  * microbrand deals and collection picks. Each post is evaluated once per 12h.
@@ -651,6 +700,8 @@ export async function scanWatchRecon(opts: ScanOptions): Promise<ScanResult> {
     const reachedEnd = (await readPages(src, older)) || older.length < OLDER_PAGES_PER_RUN;
     await redis().set(cursorKey, reachedEnd ? NEWEST_PAGES + 1 : start + OLDER_PAGES_PER_RUN, { ex: 7 * 24 * 3600 });
   }
+
+  listings.push(...(await pricelessListings(opts)));
 
   const deals: Deal[] = [];
   const soldIds: string[] = [];
@@ -702,7 +753,7 @@ export async function scanWatchRecon(opts: ScanOptions): Promise<ScanResult> {
     deals.push({
       source: "reddit",
       id: dealId,
-      title: l.title,
+      title: l.postTitle ? `${l.title} — from multi-watch post “${l.postTitle}”` : l.title,
       url: l.url,
       price: l.price,
       brand: l.brand || (l.title.split(/\s+/)[0] ?? ""),
