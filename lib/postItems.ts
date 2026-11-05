@@ -50,7 +50,7 @@ export function descriptionOf(comments: ArchiveComment[], author: string): strin
 }
 
 /** Titles of posts selling several watches. */
-const MULTI_TITLE = /\b(?:collection|trio|duo|pair|lot|bundle|clean ?out|purge|sale|watches|several|multiple|mods)\b|\d+\s*watches|\s[/&+]\s|\),?\s*\(/i;
+const MULTI_TITLE = /\b(?:collection|trio|duo|pair|lot|bundle|clea[nr] ?out|purge|downsiz\w*|sale|watches|several|multiple|mods)\b|\d+\s*watches|\s[/&+]\s|\),?\s*\(/i;
 /** Prices that aren't the watch's ask. */
 const NOT_ASK = /\b(?:strap|bracelet|band|shipping|ship|label|extra|add|retail|msrp|paid|bought (?:it )?for|new for|value|trade|insurance|for all|total|bundle|lot price|each additional|sold)\b/i;
 
@@ -69,26 +69,31 @@ export function itemsFromDescription(text: string, postTitle: string): PostItem[
   // Name-like lines since the previous price: sellers write "Name / details… / Price: $X".
   let block: string[] = [];
   for (const raw of lines) {
-    const prices = [...raw.matchAll(MONEY)].map((m) => amount(m[1] ?? m[2] ?? m[3] ?? "")).filter((p) => p >= 50 && p <= 100000);
-    if (!prices.length) {
+    const hits = [...raw.matchAll(MONEY)]
+      .map((m) => ({ price: amount(m[1] ?? m[2] ?? m[3] ?? ""), at: m.index ?? 0 }))
+      .filter((h) => h.price >= 50 && h.price <= 100000);
+    if (!hits.length) {
       if (!DETAIL.test(raw) && raw.length >= 6 && raw.length <= 160 && /[a-z]{3}/i.test(raw)) block.push(raw);
       continue;
     }
-    const before = raw.split(/\$|\busd\b|\bprice\b|\basking\b/i)[0].replace(FILLER, "").trim();
     // "Was $2,000, now $1,600": the last amount on the line is the ask.
-    const price = prices[prices.length - 1];
+    const last = hits[hits.length - 1];
+    // Only the words right before the amount say what it is ("strap $40"), not the whole description.
+    const context = raw.slice(Math.max(0, last.at - 30), last.at).split(/[.;!]\s/).pop() ?? "";
+    // Name: the first sentence before the price ("Citizen Tsuki-yomi BY1010. Got it from…").
+    const before = raw.split(/\$|\busd\b|\bprice\b|\basking\b/i)[0].split(/(?<!\b(?:ref|no|approx|vs|st))\.\s+(?=[A-Z])/i)[0].replace(FILLER, "").trim();
     const ownName = before.length >= 6 && /[a-z]{3}/i.test(before) && !DETAIL.test(before) ? before : "";
     const name = ownName || block.find((b) => BRAND.test(b)) || block[0] || "";
-    found.push({ name, price, line: raw });
+    found.push({ name, price: last.price, line: context });
     block = [];
   }
-  const asks = found.filter((i) => i.price >= 100 && !NOT_ASK.test(i.line.replace(/\b(?:price|asking)\b.*$/i, "")) && !/^sold\b/i.test(i.name));
+  const asks = found.filter((i) => i.price >= 100 && !NOT_ASK.test(i.line) && !/^sold\b/i.test(i.name));
 
   const branded = asks.filter((i) => i.name && BRAND.test(i.name));
   const multi = (MULTI_TITLE.test(postTitle) || brandCount(postTitle) >= 2) && branded.length >= 2;
   if (multi) return branded.map((i) => ({ name: i.name.slice(0, 120), price: i.price }));
 
-  const priceLine = found.find((i) => /\b(?:price|asking)\b/i.test(i.line) && i.price >= 100);
+  const priceLine = asks.find((i) => /\b(?:price|asking)\b/i.test(i.line));
   const pick = priceLine ?? asks[asks.length - 1];
   return pick ? [{ name: postTitle, price: pick.price }] : [];
 }
