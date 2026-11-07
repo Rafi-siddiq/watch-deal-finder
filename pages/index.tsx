@@ -38,7 +38,7 @@ const TABS: { key: Tab; label: string; blurb: string }[] = [
   {
     key: "drops",
     label: "Drops",
-    blurb: "New releases, restocks and announced drop dates from brands that resell at or above retail: Kurono Tokyo, Studio Underd0g, Seiko limited editions and the hyped microbrands. Checked hourly. Buy at retail, then keep or flip.",
+    blurb: "Only drops worth chasing: pieces whose Reddit asks run over retail (flip), or releases from brands that sell out and limited runs that hold retail (popular). Checked hourly. Buy at retail, then keep or flip.",
   },
 ];
 

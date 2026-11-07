@@ -32,7 +32,7 @@ export default function DropsPanel({
       <h2 className="mt-5 font-mono text-[11px] uppercase tracking-[0.14em] text-brand">Alerts, last 30 days</h2>
       {drops.length === 0 ? (
         <p className="mt-2 rounded-2xl border border-border bg-card px-4 py-4 text-[13px] leading-relaxed text-muted">
-          Nothing new yet. New releases, restocks and announced drop dates land here within an hour.
+          Nothing worth chasing yet. Only drops that resell over retail on Reddit, or come from brands that sell out (Kurono, Studio Underd0g, Halios, anOrdain), show here.
         </p>
       ) : (
         <ul className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -47,6 +47,7 @@ export default function DropsPanel({
               </a>
               <div className="mt-2 flex flex-wrap items-center gap-2 text-[12px]">
                 <span className="rounded-full bg-brand-dim px-2 py-0.5 font-medium text-brand">{STATUS[e.type]}</span>
+                <VerdictBadge verdict={e.verdict} pct={e.resalePct} />
                 {e.limited && <span className="rounded-full border border-brand/40 px-2 py-0.5 text-brand">Limited</span>}
                 {e.available !== undefined && e.type !== "page" && e.type !== "announcement" && (
                   <span className="text-muted">{e.available ? "In stock" : "Sold out"}</span>
@@ -60,7 +61,7 @@ export default function DropsPanel({
 
       <h2 className="mt-7 font-mono text-[11px] uppercase tracking-[0.14em] text-brand">Available now at retail</h2>
       <p className="mt-1 text-[13px] leading-relaxed text-muted">
-        In-stock limited editions from the last 6 months and releases from the last 45 days. In stock means not sold out, so most trade near retail: buy to keep, or flip only the hyped ones.
+        In-stock pieces whose Reddit asks run over retail (flip) or that come from sell-out brands or limited runs asked near retail (popular). Everything that trades under retail is hidden.
       </p>
       {current.length === 0 ? (
         <p className="mt-3 rounded-2xl border border-border bg-card px-4 py-4 text-[13px] text-muted">
@@ -77,6 +78,7 @@ export default function DropsPanel({
                 </a>
               </div>
               <div className="flex shrink-0 items-center gap-2 text-[12px]">
+                <VerdictBadge verdict={c.verdict} pct={c.resalePct} />
                 {c.limited ? (
                   <span className="rounded-full border border-brand/40 px-2 py-0.5 text-brand">Limited</span>
                 ) : c.listedAt ? (
@@ -89,6 +91,17 @@ export default function DropsPanel({
         </ul>
       )}
     </div>
+  );
+}
+
+/** Flip = Reddit asks over retail; popular = sell-out brand or limited piece asked near retail. */
+function VerdictBadge({ verdict, pct }: { verdict?: "flip" | "popular"; pct?: number }) {
+  if (!verdict) return null;
+  const label = verdict === "flip" ? "Flip" : "Popular";
+  return (
+    <span className={verdict === "flip" ? "rounded-full bg-brand px-2 py-0.5 font-medium text-on-brand" : "rounded-full bg-brand-dim px-2 py-0.5 font-medium text-brand"}>
+      {label}{pct ? ` · resells ~${pct}% of retail` : ""}
+    </span>
   );
 }
 

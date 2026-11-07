@@ -1,4 +1,5 @@
 import { Redis } from "@upstash/redis";
+import { searchListings } from "./watchrecon";
 
 /**
  * Drop watcher: new releases, restocks and announced on-sale dates from brands whose
@@ -25,14 +26,16 @@ export interface DropSite {
   limitedOnly?: boolean;
   /** Also alert when a sold-out piece comes back (hyped brands whose restocks sell out). */
   restocks?: boolean;
+  /** Releases sell out and resell at or above retail, so even without Reddit comps a drop is worth seeing. */
+  hype?: boolean;
 }
 
 export const DROP_SITES: DropSite[] = [
-  { brand: "Kurono Tokyo", base: "https://kuronotokyo.com", kind: "pages", pages: ["/", "/collections/all"], restocks: true },
-  { brand: "Studio Underd0g", base: "https://studiounderd0g.com", kind: "pages", pages: ["/", "/collections/all"], restocks: true },
+  { brand: "Kurono Tokyo", base: "https://kuronotokyo.com", kind: "pages", pages: ["/", "/collections/all"], restocks: true, hype: true },
+  { brand: "Studio Underd0g", base: "https://studiounderd0g.com", kind: "pages", pages: ["/", "/collections/all"], restocks: true, hype: true },
   { brand: "Seiko", base: "https://seikousa.com", kind: "shopify", feedPages: 8, limitedOnly: true },
-  { brand: "Halios", base: "https://halioswatches.com", kind: "shopify", restocks: true },
-  { brand: "anOrdain", base: "https://anordain.com", kind: "shopify", restocks: true },
+  { brand: "Halios", base: "https://halioswatches.com", kind: "shopify", restocks: true, hype: true },
+  { brand: "anOrdain", base: "https://anordain.com", kind: "shopify", restocks: true, hype: true },
   { brand: "Serica", base: "https://serica-watches.com", kind: "shopify", restocks: true },
   { brand: "Farer", base: "https://farer.com", kind: "shopify" },
   { brand: "Monta", base: "https://montawatch.com", kind: "shopify" },
@@ -55,7 +58,14 @@ export interface DropEvent {
   limited?: boolean;
   url: string;
   at: number;
+  /** Set when read: why it's worth seeing. */
+  verdict?: Verdict;
+  /** Median Reddit ask for this model as a percent of retail, when there are enough asks. */
+  resalePct?: number;
 }
+
+/** flip = Reddit asks for this model run 5%+ over retail; popular = a brand whose drops sell out, or asks near retail on a limited piece. */
+export type Verdict = "flip" | "popular";
 
 interface SeenProduct {
   title: string;
@@ -64,6 +74,8 @@ interface SeenProduct {
   limited?: boolean;
   /** When the shop first listed it (Shopify created_at), Unix ms. */
   listedAt?: number;
+  /** When we first saw it sold out; a restock only counts after a real sell-out, not a stock blip. */
+  soldOutAt?: number;
 }
 
 /** A piece you can buy at retail right now: an in-stock limited edition from the last 6 months, or any release from the last 45 days. */
@@ -74,6 +86,8 @@ export interface CurrentDrop {
   limited: boolean;
   listedAt?: number;
   url: string;
+  verdict: Verdict;
+  resalePct?: number;
 }
 const CURRENT_DAYS = 45;
 /** Limited editions still in stock after this long didn't sell out, so they aren't drops. */
@@ -84,7 +98,18 @@ const EVENTS_KEY = "drops:events";
 const SEEN_KEY = "drops:seen"; // hash: "brand|handle" -> SeenProduct
 const ANN_KEY = "drops:announcements"; // set of "brand|sentence" and "brand|page:/pages/x" already reported
 const CHECKED_KEY = "drops:checkedAt";
+const RESALE_KEY = "drops:resale"; // hash: "brand|handle" -> Resale
 const MAX_EVENTS = 100;
+/** Resale lookups per hourly check (each is one WatchRecon search), refreshed weekly. */
+const MAX_RESALE_LOOKUPS = 25;
+const RESALE_TTL_MS = 7 * 86_400_000;
+/** A "new" product the shop listed longer ago than this was just unhidden, not released. */
+const NEW_MAX_AGE_MS = 21 * 86_400_000;
+/** A restock needs this long sold out first, and alerts at most once a month per piece. */
+const RESTOCK_MIN_SOLD_OUT_MS = 24 * 3_600_000;
+const RESTOCK_REPEAT_MS = 30 * 86_400_000;
+/** Pricier than this isn't a flip at retail for this owner. */
+const MAX_DROP_PRICE = 5000;
 const MAX_PRODUCTS = 40;
 const MAX_RELEASE_PAGES = 30;
 /** Site pages that are never releases. */
@@ -96,7 +121,7 @@ const ACCESSORY_TITLE = /^\W*(?:[\w-]+ )?(?:straps?|bracelets?|bands?|nato|buckl
 const MIN_PRICE = 150;
 const notWatch = (title: string, type = "") => ACCESSORY_TITLE.test(title) || (type !== "" && ACCESSORY_TYPE.test(type));
 // "Limited warranty" isn't a limited edition, so a bare "limited" doesn't count.
-const LIMITED = /limited edition|limited (?:series|run|release|production)|\blimit(?:ed)? to \d|\bLE\b|numbered|pieces worldwide|\b\d{2,5} (?:pieces|units|examples)\b|one of \d+/i;
+const LIMITED = /limited edition|[ée]dition limit[ée]e|limited (?:series|run|release|production)|\blimit(?:ed)? to \d|\bLE\b|numbered|pieces worldwide|\b\d{2,5} (?:pieces|units|examples)\b|one of \d+/i;
 
 let _redis: Redis | null = null;
 function redis(): Redis {
@@ -141,6 +166,8 @@ interface Run {
   seenUpdates: Record<string, SeenProduct>;
   newAnnouncements: string[];
   events: DropEvent[];
+  /** Product urls with a restock alert in the last month. */
+  recentRestocks: Set<string>;
 }
 
 /** First sighting of a brand records what's there without alerting. */
@@ -152,10 +179,16 @@ function noteProduct(run: Run, site: DropSite, handle: string, cur: SeenProduct,
   const prev = run.seen[key];
   const url = `${site.base}/products/${handle}`;
   const base = { brand: site.brand, ...cur, limited: limited || undefined, url, at: run.now };
-  if (!prev && !firstRun) run.events.push({ ...base, type: "new" });
-  else if (prev && !prev.available && cur.available && (site.restocks || limited)) run.events.push({ ...base, type: "restock" });
-  const next = { ...cur, limited: limited || undefined };
-  if (!prev || prev.available !== cur.available || prev.price !== cur.price || prev.limited !== next.limited || prev.listedAt !== cur.listedAt) run.seenUpdates[key] = next;
+  const fresh = cur.listedAt === undefined || run.now - cur.listedAt <= NEW_MAX_AGE_MS;
+  if (!prev && !firstRun && fresh) run.events.push({ ...base, type: "new" });
+  else if (
+    prev && !prev.available && cur.available && (site.restocks || limited) &&
+    prev.soldOutAt !== undefined && run.now - prev.soldOutAt >= RESTOCK_MIN_SOLD_OUT_MS &&
+    !run.recentRestocks.has(url)
+  ) run.events.push({ ...base, type: "restock" });
+  const soldOutAt = cur.available ? undefined : (prev && !prev.available && prev.soldOutAt) || run.now;
+  const next = { ...cur, limited: limited || undefined, soldOutAt };
+  if (!prev || prev.available !== cur.available || prev.price !== cur.price || prev.limited !== next.limited || prev.listedAt !== cur.listedAt || prev.soldOutAt !== soldOutAt) run.seenUpdates[key] = next;
 }
 
 async function checkShopify(run: Run, site: DropSite) {
@@ -256,8 +289,79 @@ async function checkPages(run: Run, site: DropSite) {
   }
 }
 
+// --- Resale: is this model worth chasing at retail? ---
+
+interface Resale {
+  /** Median Reddit ask (all time) for the model. */
+  median?: number;
+  asks: number;
+  at: number;
+}
+
+/** Words that name a variant or the edition, not the model. */
+const NOT_MODEL = /^(?:limited|edition|[ée]dition|limit[ée]e|le|launch|special|the|and|with|on|in|of|for|ref|r[ée]f|dial|bracelet|strap|leather|rubber|steel|automatic|watch|new|pre-?order|black|white|blue|green|red|silver|grey|gray|gold|brown|cream|orange|yellow|purple|pink|opal|opalin|lin|seafoam|sunburst|fum[ée]|salmon|teal|navy|bronze|titanium|eastern|arabic|camo|ghost|liquid)$/i;
+
+/** Reddit searches for the model, tightest first: a Seiko-style reference, a 4-digit base reference, else the brand and the first one or two model words. */
+function modelQueries(brand: string, title: string): string[] {
+  const short = brand.replace(/^studio /i, "").split(/[\s/]/)[0].toLowerCase();
+  const ref = title.match(/\b[A-Z]{3,4}\d{3}[A-Z]?\b/)?.[0];
+  if (ref) return [`${short} ${ref}`];
+  // Serica-style "Réf. 8315-3": the base reference is the model.
+  const num = title.match(/\b(\d{4})(?:-\d)?\b/)?.[1];
+  if (num) return [`${short} ${num}`];
+  const words = title
+    .replace(/[“”"'()|–—:,]/g, " ")
+    .split(/\s+/)
+    .map((w) => w.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, ""))
+    .filter((w) => (w.length >= 3 || /^\d{1,2}$/.test(w)) && !NOT_MODEL.test(w) && !brand.toLowerCase().includes(w.toLowerCase()));
+  if (!words.length) return [];
+  return words.length >= 2 ? [`${short} ${words[0]} ${words[1]}`, `${short} ${words[0]}`] : [`${short} ${words[0]}`];
+}
+
+async function lookupResale(brand: string, title: string, now: number): Promise<Resale> {
+  let asks: number[] = [];
+  for (const q of modelQueries(brand, title)) {
+    asks = (await searchListings(q, { days: 0 })).map((l) => l.price).filter((p) => p > 0).sort((a, b) => a - b);
+    if (asks.length >= 3) break;
+  }
+  return { median: asks.length >= 3 ? asks[Math.floor((asks.length - 1) / 2)] : undefined, asks: asks.length, at: now };
+}
+
+const HYPE = new Set(DROP_SITES.filter((s) => s.hype).map((s) => s.brand));
+
+/** Worth showing? Reddit asks well over retail = flip; a sell-out brand or a limited piece asked near retail = popular; else nothing. */
+export function verdictOf(brand: string, price: number | undefined, limited: boolean, r: Resale | undefined): { verdict?: Verdict; resalePct?: number } {
+  if (price !== undefined && price > MAX_DROP_PRICE) return {};
+  const pct = r?.median && price ? Math.round((r.median / price) * 100) : undefined;
+  if (pct !== undefined) {
+    if (pct >= 105) return { verdict: "flip", resalePct: pct };
+    if (pct >= 92 && (limited || HYPE.has(brand))) return { verdict: "popular", resalePct: pct };
+    if (pct >= 85 && HYPE.has(brand)) return { verdict: "popular", resalePct: pct };
+    return { resalePct: pct };
+  }
+  return HYPE.has(brand) ? { verdict: "popular" } : {};
+}
+
+/** Fetch missing or week-old resale for these products (oldest first, capped per run). */
+async function refreshResale(items: { key: string; brand: string; title: string }[], now: number) {
+  const cache = (await redis().hgetall<Record<string, Resale>>(RESALE_KEY)) ?? {};
+  const todo = items.filter((i) => !cache[i.key] || now - cache[i.key].at > RESALE_TTL_MS).slice(0, MAX_RESALE_LOOKUPS);
+  const updates: Record<string, Resale> = {};
+  for (const i of todo) {
+    try {
+      updates[i.key] = await lookupResale(i.brand, i.title, now);
+    } catch (e) {
+      console.log(`[drops] resale lookup failed for ${i.title}:`, (e as Error).message);
+    }
+  }
+  if (Object.keys(updates).length) await redis().hset(RESALE_KEY, updates);
+}
+
+const keyOfUrl = (brand: string, url: string) => `${brand}|${url.split("/products/")[1] ?? ""}`;
+
 /** Check every drop site once; returns (and stores) what changed since the last check. */
 export async function checkDrops(now = Date.now(), sites: DropSite[] = DROP_SITES): Promise<DropEvent[]> {
+  const past = await redis().lrange<DropEvent>(EVENTS_KEY, 0, MAX_EVENTS - 1);
   const run: Run = {
     now,
     seen: (await redis().hgetall<Record<string, SeenProduct>>(SEEN_KEY)) ?? {},
@@ -265,6 +369,7 @@ export async function checkDrops(now = Date.now(), sites: DropSite[] = DROP_SITE
     seenUpdates: {},
     newAnnouncements: [],
     events: [],
+    recentRestocks: new Set(past.filter((e) => e.type === "restock" && now - e.at < RESTOCK_REPEAT_MS).map((e) => e.url)),
   };
   for (const site of sites) {
     try {
@@ -279,21 +384,36 @@ export async function checkDrops(now = Date.now(), sites: DropSite[] = DROP_SITE
     await redis().lpush(EVENTS_KEY, ...run.events);
     await redis().ltrim(EVENTS_KEY, 0, MAX_EVENTS - 1);
   }
+  // Resale for this run's alerts first, then what's buyable now.
+  const seen = { ...run.seen, ...run.seenUpdates };
+  const candidates = [
+    ...run.events.filter((e) => e.url.includes("/products/")).map((e) => ({ key: keyOfUrl(e.brand, e.url), brand: e.brand, title: e.title })),
+    ...candidatesFrom(seen, now).map(([key, p]) => ({ key, brand: key.split("|")[0], title: p.title })),
+  ];
+  await refreshResale(candidates, now).catch((e) => console.log("[drops] resale refresh failed:", (e as Error).message));
   await redis().set(CHECKED_KEY, now);
   return run.events;
 }
 
-/** Buyable now: in-stock limited editions from the last 6 months and in-stock releases from the last 45 days, newest listing first. */
-function currentFrom(seen: Record<string, SeenProduct>, now: number): CurrentDrop[] {
-  const base = new Map(DROP_SITES.map((s) => [s.brand, s.base]));
+/** In stock and recent: limited editions from the last 6 months, other releases from the last 45 days, at a price worth flipping. */
+function candidatesFrom(seen: Record<string, SeenProduct>, now: number): [string, SeenProduct][] {
   const within = (p: SeenProduct, days: number) => p.listedAt === undefined || now - p.listedAt <= days * 86_400_000;
   return Object.entries(seen)
-    .filter(([, p]) => p.available && (p.limited ? within(p, CURRENT_LIMITED_DAYS) : p.listedAt !== undefined && within(p, CURRENT_DAYS)))
-    .map(([key, p]) => {
+    .filter(([, p]) => p.available && (p.price === undefined || p.price <= MAX_DROP_PRICE))
+    .filter(([, p]) => (p.limited ? within(p, CURRENT_LIMITED_DAYS) : p.listedAt !== undefined && within(p, CURRENT_DAYS)));
+}
+
+/** Buyable now and worth it (flip or popular), flips first, then newest listing. */
+function currentFrom(seen: Record<string, SeenProduct>, resale: Record<string, Resale>, now: number): CurrentDrop[] {
+  const base = new Map(DROP_SITES.map((s) => [s.brand, s.base]));
+  return candidatesFrom(seen, now)
+    .map(([key, p]): Omit<CurrentDrop, "verdict"> & { verdict?: Verdict } => {
       const [brand, handle] = key.split("|");
-      return { brand, title: p.title, price: p.price, limited: Boolean(p.limited), listedAt: p.listedAt, url: `${base.get(brand) ?? ""}/products/${handle}` };
+      const v = verdictOf(brand, p.price, Boolean(p.limited), resale[key]);
+      return { brand, title: p.title, price: p.price, limited: Boolean(p.limited), listedAt: p.listedAt, url: `${base.get(brand) ?? ""}/products/${handle}`, verdict: v.verdict, resalePct: v.resalePct };
     })
-    .sort((a, b) => (b.listedAt ?? 0) - (a.listedAt ?? 0));
+    .filter((c): c is CurrentDrop => c.verdict !== undefined)
+    .sort((a, b) => Number(b.verdict === "flip") - Number(a.verdict === "flip") || (b.listedAt ?? 0) - (a.listedAt ?? 0));
 }
 
 /** Per brand: products tracked, in stock, flagged limited, and with a listing date (shows the watcher is reading each shop). */
@@ -309,21 +429,33 @@ function trackedStats(seen: Record<string, SeenProduct>) {
   return out;
 }
 
-/** Drop alerts from the last `days` days (newest first), what's buyable now, when the sites were last checked, and which brands are watched. */
+/** Drop alerts worth acting on from the last `days` days (newest first, one per piece and kind), what's buyable now, when the sites were last checked, and which brands are watched. */
 export async function recentDrops(
   days = 14,
   now = Date.now()
 ): Promise<{ checkedAt: number | null; brands: string[]; events: DropEvent[]; current: CurrentDrop[]; tracked: Record<string, { products: number; inStock: number; limited: number; dated: number }> }> {
-  const [raw, checkedAt, seen] = await Promise.all([
+  const [raw, checkedAt, seen, resale] = await Promise.all([
     redis().lrange<DropEvent>(EVENTS_KEY, 0, MAX_EVENTS - 1),
     redis().get<number>(CHECKED_KEY),
     redis().hgetall<Record<string, SeenProduct>>(SEEN_KEY),
+    redis().hgetall<Record<string, Resale>>(RESALE_KEY),
   ]);
+  const shown = new Set<string>();
+  const events: DropEvent[] = [];
+  for (const e of raw) {
+    if (now - e.at > days * 86_400_000) continue;
+    const id = `${e.url}|${e.type}`;
+    if (shown.has(id)) continue;
+    shown.add(id);
+    // Release pages and dated announcements come only from the sell-out brands' sites.
+    const v = e.url.includes("/products/") ? verdictOf(e.brand, e.price, Boolean(e.limited), resale?.[keyOfUrl(e.brand, e.url)]) : verdictOf(e.brand, undefined, false, undefined);
+    if (v.verdict) events.push({ ...e, ...v });
+  }
   return {
     checkedAt: checkedAt ?? null,
     brands: DROP_SITES.map((s) => s.brand),
-    events: raw.filter((e) => now - e.at <= days * 86_400_000),
-    current: currentFrom(seen ?? {}, now),
+    events,
+    current: currentFrom(seen ?? {}, resale ?? {}, now),
     tracked: trackedStats(seen ?? {}),
   };
 }

@@ -97,7 +97,8 @@ const TOOLS = [
       "Drops from brands whose limited releases resell at or above retail (Kurono Tokyo, Studio Underd0g, Seiko limited editions, " +
       "Halios, anOrdain, Serica, Farer, Monta, Traska, Zelos, echo/neutra, Brew, Yema, Doxa), checked hourly. " +
       "events: new = new product, restock = back in stock, page = new release page, announcement = dated on-sale notice. " +
-      "current: what can be bought at retail right now (in-stock limited editions from the last 6 months and releases from the last 45 days). Show the url.",
+      "current: what can be bought at retail right now. Only drops worth chasing are returned: verdict flip = Reddit asks for the model run 5%+ over retail " +
+      "(resalePct = median ask as % of retail), popular = a sell-out brand (Kurono, Studio Underd0g, Halios, anOrdain) or a limited piece asked near retail. Show the url.",
     inputSchema: {
       type: "object",
       properties: { days: { type: "number", description: "Look-back in days, default 14." } },
