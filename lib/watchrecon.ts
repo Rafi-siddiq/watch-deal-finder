@@ -726,7 +726,7 @@ export async function scanWatchRecon(opts: ScanOptions): Promise<ScanResult> {
     if (done.has(l.postId)) continue;
     evaluated++;
     judged.push(dealId);
-    const allowName = MICRO.test(l.title) || l.price <= opts.cheapMax || (l.price <= opts.collectionMax && isSmall(l.title));
+    const allowName = MICRO.test(l.title) || l.price <= opts.collectionMax; // any brand up to the collection budget gets comps from similar listings
     const comp = await compOf(l.title, l.user, allowName);
     await redis().set(evalKey, 1, { ex: 12 * 3600 });
     if (!comp) continue;
@@ -823,7 +823,7 @@ export async function scanEbay(listings: RawListing[], opts: ScanOptions): Promi
     evaluated++;
     judgedEbay.push(l.id);
     const seller = l.sellerName ?? "";
-    const allowName = MICRO.test(l.title) || l.price <= opts.cheapMax || (l.price <= opts.collectionMax && isSmall(l.title));
+    const allowName = MICRO.test(l.title) || l.price <= opts.collectionMax; // any brand up to the collection budget gets comps from similar listings
     const comp = await compOf(l.title, seller, allowName);
     await redis().set(evalKey, 1, { ex: 12 * 3600 });
     if (!comp) continue;

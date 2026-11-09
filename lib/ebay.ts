@@ -23,6 +23,12 @@ const SEARCH_TERMS = [
   "Serica", "Halios", "Nivada Grenchen", "Monta watch", "Kurono", "Studio Underd0g",
   "Formex", "Christopher Ward", "Zodiac Sea Wolf", "Doxa", "Yema", "Beaubleu",
   "Brew watch", "Nodus", "Unimatic",
+  // Other brands with a real resale market under ~$2,500
+  "Tissot", "Mido", "Certina", "Ball watch", "Bell & Ross", "Montblanc", "Glashutte Original",
+  "Junghans", "Stowa", "Damasko", "Squale", "Vulcain", "Universal Geneve", "Heuer",
+  "Jaeger-LeCoultre", "Baume Mercier", "Raymond Weil", "Maurice Lacroix", "Chopard",
+  "Ulysse Nardin", "Girard-Perregaux", "Eterna", "Fortis", "Alpina", "Citizen",
+  "Orient Star", "Bulova Accutron", "Carl F. Bucherer", "Glycine", "Tutima",
 ];
 
 let cachedToken: { token: string; expiresAt: number } | null = null;
