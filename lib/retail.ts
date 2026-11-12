@@ -1,4 +1,5 @@
 import { Redis } from "@upstash/redis";
+import { recordPrices } from "./traps";
 
 /**
  * Retail deal scanner: everyday stores (Amazon, Walmart, Target, Best Buy, Home Depot...)
@@ -40,6 +41,10 @@ export interface RetailDeal {
   signals: Signal[];
   /** Slickdeals thumb score. */
   thumbs?: number;
+  /** Who actually sells it when it's a marketplace listing ("MERACH Direct via Amazon"). */
+  seller?: string;
+  /** The deal's own wording (first ~400 chars), checked for strings attached: memberships, rebates, trade-ins. */
+  terms?: string;
   url: string;
   postedAt: number;
   expiresAt?: number;
@@ -133,10 +138,26 @@ const tag = (item: string, name: string) => {
 };
 const money = (s: string) => Number(s.replace(/,/g, ""));
 
-/** First dollar amount in the text (the deal price in deal titles). */
+const AMOUNT = /\$\s?(\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?)/g;
+/** "$400 credit", "$300 off", "$200 gift card", "up to $1900": amounts that aren't what you pay. */
+const NOT_PRICE_AFTER = /^\W{0,3}(?:off|credit|in credit|gift ?card|gc|back|bonus|toward|for accessor|savings|instant|rebate)/i;
+const NOT_PRICE_BEFORE = /(?:up to|save|over|orders?|spend|w\/)\s*$/i;
+
+/** First dollar amount in the text. */
 export function firstPrice(s: string): number | undefined {
-  const m = s.match(/\$\s?(\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?)/);
+  const m = s.match(/\$\s?(\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?)/);
   const n = m ? money(m[1]) : NaN;
+  return Number.isFinite(n) && n > 0 ? n : undefined;
+}
+
+/** The price you pay in a deal title: Slickdeals puts it last, after any "$400 credit" or "$300 off" extras. */
+export function titlePrice(title: string): number | undefined {
+  const all = [...title.matchAll(AMOUNT)].filter((m) => {
+    const i = m.index ?? 0;
+    return !NOT_PRICE_AFTER.test(title.slice(i + m[0].length)) && !NOT_PRICE_BEFORE.test(title.slice(Math.max(0, i - 12), i));
+  });
+  // Every amount is a credit or a discount ("Up to $1900 Off"): there's no single price to quote.
+  const n = all.length ? money(all[all.length - 1][1]) : NaN;
   return Number.isFinite(n) && n > 0 ? n : undefined;
 }
 
@@ -188,11 +209,15 @@ const STORES: [RegExp, string][] = [
   [/macy'?s/i, "Macy's"], [/kohl'?s/i, "Kohl's"], [/woot/i, "Woot"], [/newegg/i, "Newegg"], [/b ?& ?h|bhphoto/i, "B&H"],
   [/ebay/i, "eBay"], [/aliexpress/i, "AliExpress"], [/dell/i, "Dell"], [/apple\.com/i, "Apple"], [/nordstrom/i, "Nordstrom"],
   [/dick'?s/i, "Dick's Sporting Goods"], [/wayfair/i, "Wayfair"], [/jomashop/i, "Jomashop"], [/ashford/i, "Ashford"],
+  [/^at-?t|att-wireless|\bat&t\b/i, "AT&T"], [/t-?mobile/i, "T-Mobile"], [/verizon/i, "Verizon"], [/samsung/i, "Samsung"],
+  [/spectrum/i, "Spectrum"], [/visible/i, "Visible"], [/mint ?mobile/i, "Mint Mobile"],
 ];
 export function normalizeStore(s: string | undefined): string | undefined {
   if (!s) return undefined;
   for (const [re, name] of STORES) if (re.test(s)) return name;
-  return s.replace(/\.(com|net|us)$/i, "").trim() || undefined;
+  // Slickdeals store slugs ("hp-store", "lowes") read as names.
+  const cleaned = s.replace(/\.(com|net|us)$/i, "").replace(/-/g, " ").trim();
+  return cleaned ? cleaned.replace(/\b[a-z]/g, (c) => c.toUpperCase()) : undefined;
 }
 
 /** 0-100: how hard to pass up. Community votes, editor flags, depth of discount, freshness. */
@@ -236,14 +261,17 @@ export function parseSlickdeals(xml: string, signal: Signal | undefined, now: nu
     const slug = raw.match(/data-store-slug="([^"]+)"/i)?.[1] ?? raw.match(/data-product-exitWebsite="([^"]+)"/i)?.[1];
     const domain = slug || (desc.match(/\[([a-z0-9.-]+\.[a-z]{2,})\]/i) || [])[1];
     const via = desc.match(/via ([A-Z][\w&'. -]{1,30}?)\s*\[/)?.[1];
+    const seller = desc.match(/^\W*([^*[\]]{2,40}?)\s+via\s+[A-Z]/)?.[1]?.trim();
     const text = `${title} ${desc}`;
-    const price = firstPrice(title);
+    const price = titlePrice(title);
     const postedAt = Date.parse(tag(it, "pubDate") ?? "") || now;
     const signals = [...(signal ? [signal] : []), ...signalsOf(text)];
     out.push(finish({
       id: `sd:${thread}`,
       source: "slickdeals",
       title,
+      seller,
+      terms: desc.slice(0, 400),
       store: normalizeStore(via || domain || title.match(/\bat ([A-Z][\w&' .-]{1,25})$/)?.[1]),
       price,
       was: wasPrice(text, price),
@@ -281,6 +309,7 @@ export function parseDealnews(xml: string, now: number): RetailDeal[] {
       id: `dn:${id}`,
       source: "dealnews",
       title,
+      terms: desc.slice(0, 400),
       store: normalizeStore(tag(it, "dealnews:retailer")),
       price,
       was: wasPrice(text, price),
@@ -375,6 +404,7 @@ export async function checkRetail(now = Date.now()): Promise<{ found: number; st
     batches.push(await fetchBestBuy(now).catch((e) => (console.log("[retail] Best Buy failed:", (e as Error).message), [])));
   }
   const found = batches.flat();
+  await recordPrices(found, now).catch((e) => console.log("[retail] price history failed:", (e as Error).message));
 
   const stored = (await redis().hgetall<Record<string, RetailDeal>>(DEALS_KEY)) ?? {};
   const updates: Record<string, RetailDeal> = {};

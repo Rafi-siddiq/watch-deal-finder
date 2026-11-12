@@ -102,6 +102,12 @@ npx tsx --env-file=.env.local scripts/load-offers.ts ~/card-offers.json
 
 See the comment at the top of [`scripts/load-offers.ts`](scripts/load-offers.ts) for the file shape.
 
+Every price the scanner sees is kept for 180 days per product (`retail:history`), and
+[`lib/traps.ts`](lib/traps.ts) uses it with each deal's wording to flag retailer tricks: seen
+cheaper before, repeat deals, inflated "was" prices, Black Friday-only TV models, carrier bill
+credits, mail-in rebates, trade-in and membership prices, marketplace sellers. Flagged deals lose
+score, and `price_check` shows a product's history.
+
 ## What's intentionally NOT built (later phases)
 
 Chrono24 / Grailed / FB Marketplace scraping, auto-messaging sellers, and a full
