@@ -86,6 +86,22 @@ Everything scorer-related lives in [`config/watchlist.json`](config/watchlist.js
 
 Edit the medians with real comps as you gather them.
 
+## Retail deals and offer stacking
+
+Each scan cycle also reads the Slickdeals frontpage and popular feeds and DealNews; hourly it
+searches Slickdeals for clearance, price mistakes and all-time lows, and (with a free
+`BESTBUY_API_KEY`) Best Buy markdowns and clearance. Deals land in Redis under `retail:*`.
+
+The connector's `retail_deals`, `retail_live_search`, `stack_offers` and `card_offers` tools
+stack each deal with your card offers and cashback rates. Those are personal, so they live
+only in Redis — load them from a JSON file kept outside this repo:
+
+```bash
+npx tsx --env-file=.env.local scripts/load-offers.ts ~/card-offers.json
+```
+
+See the comment at the top of [`scripts/load-offers.ts`](scripts/load-offers.ts) for the file shape.
+
 ## What's intentionally NOT built (later phases)
 
 Chrono24 / Grailed / FB Marketplace scraping, auto-messaging sellers, and a full
