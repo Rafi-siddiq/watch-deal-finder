@@ -64,6 +64,8 @@ jobs:
           # Optional Reddit app keys: removes sold/deleted posts each run (anonymous Reddit blocks GitHub too).
           REDDIT_CLIENT_ID: ${{ secrets.REDDIT_CLIENT_ID }}
           REDDIT_CLIENT_SECRET: ${{ secrets.REDDIT_CLIENT_SECRET }}
+          # Optional free Best Buy API key: adds Best Buy markdowns and clearance to the retail scan.
+          BESTBUY_API_KEY: ${{ secrets.BESTBUY_API_KEY }}
           APP_URL: ${{ secrets.APP_URL }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
           SCAN_MODE: ${{ inputs.full && 'full' || '' }}

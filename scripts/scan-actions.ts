@@ -5,11 +5,13 @@
 //  - every 3h, or SCAN_MODE=full on the first cycle: the whole 14-day window (stale / lowball);
 //  - eBay at most hourly (Browse API allows 5,000 calls a day);
 //  - then asks the site to AI-review new deals (APP_URL + CRON_SECRET);
-//  - hourly, checks Kurono Tokyo / Studio Underd0g for new drops (lib/drops.ts).
+//  - hourly, checks Kurono Tokyo / Studio Underd0g for new drops (lib/drops.ts);
+//  - each cycle, retail deals from Slickdeals / DealNews / Best Buy (lib/retail.ts).
 // Run: npx tsx scripts/scan-actions.ts   (needs UPSTASH_REDIS_REST_URL / _TOKEN; LOOP_MINUTES=0 = one cycle)
 import { Redis } from "@upstash/redis";
 import { runScan } from "../lib/scan";
 import { checkDrops } from "../lib/drops";
+import { checkRetail } from "../lib/retail";
 
 const MIN = 60_000;
 const FULL_EVERY_MS = 180 * MIN;
@@ -41,7 +43,9 @@ async function cycle(forceFull: boolean): Promise<boolean> {
     const drops = await checkDrops().catch((e) => (console.log("drops check failed:", (e as Error).message), []));
     console.log("drops:", drops.length ? JSON.stringify(drops) : "nothing new");
   }
-  return s.reddit.ok || s.ebay.ok;
+  const retail = await checkRetail().catch((e) => (console.log("retail check failed:", (e as Error).message), null));
+  if (retail) console.log("retail:", JSON.stringify(retail));
+  return s.reddit.ok || s.ebay.ok || Boolean(retail?.found);
 }
 
 async function review() {
